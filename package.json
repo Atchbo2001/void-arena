@@ -1,0 +1,12 @@
+{
+  "name": "void-arena-pterodactyl",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Full Sour/Sauerbraten server fork packaged for the Pterodactyl Node.js 22 egg.",
+  "scripts": {
+    "start": "bash ./start.sh"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
