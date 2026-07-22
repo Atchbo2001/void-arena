@@ -12,6 +12,6 @@ $CONTAINER_CMD run \
   -v "$PROJECT_ROOT":/workspace \
   -w /workspace \
   "$IMAGE_TAG" \
-  bash -lc 'go build -o /workspace/bin/sour ./cmd/sour'
+  bash -lc 'go build -buildvcs=false -o /workspace/bin/sour ./cmd/sour'
 
 echo "Successfully built sour server binary"

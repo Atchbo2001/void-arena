@@ -12,7 +12,7 @@ $CONTAINER_CMD run \
   -v "$PROJECT_ROOT":/workspace \
   -w /workspace \
   "$IMAGE_TAG" \
-  bash -lc 'go build -o /workspace/bin/sour ./cmd/sour'
+  bash -lc 'go build -buildvcs=false -o /workspace/bin/sour ./cmd/sour'
 
 # Build the serve image
 $CONTAINER_CMD build -f "$PROJECT_ROOT/docker/serve.Dockerfile" -t sour-game:latest "$PROJECT_ROOT"

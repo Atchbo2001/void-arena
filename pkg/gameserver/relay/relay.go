@@ -241,7 +241,7 @@ func (r *Relay) flush(packets map[uint32][]protocol.Message, prefix func(uint32,
 			}
 			offset += l
 		}
-		
+
 		if len(receiverPackets) > 0 {
 			r.send[receiverCN](channel, receiverPackets)
 		}

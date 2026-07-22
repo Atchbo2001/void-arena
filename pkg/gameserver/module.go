@@ -37,6 +37,11 @@ type MapEdit struct {
 	Message P.Message
 }
 
+type mapVoteChoice struct {
+	Map  string
+	Mode gamemode.ID
+}
+
 type Incoming <-chan ServerPacket
 type Outgoing chan<- ServerPacket
 
@@ -56,9 +61,11 @@ type Server struct {
 	pendingMapChange *time.Timer
 	rng              *rand.Rand
 
-	incoming chan ServerPacket
-	outgoing chan ServerPacket
-	maps     chan string
+	incoming    chan ServerPacket
+	outgoing    chan ServerPacket
+	maps        chan string
+	mapVotes    map[uint32]mapVoteChoice
+	lifeRepairs map[uint64]time.Time
 
 	Broadcasts *utils.Topic[[]P.Message]
 	Edits      *utils.Topic[MapEdit]
@@ -90,12 +97,14 @@ func New(ctx context.Context, conf *Config) *Server {
 			UpSince:    time.Now(),
 			NumClients: clients.GetNumClients,
 		},
-		relay:    relay.New(),
-		Clients:  clients,
-		incoming: incoming,
-		outgoing: outgoing,
-		maps:     make(chan string, 1),
-		rng:      rand.New(rand.NewSource(time.Now().UnixNano())),
+		relay:       relay.New(),
+		Clients:     clients,
+		incoming:    incoming,
+		outgoing:    outgoing,
+		maps:        make(chan string, 1),
+		mapVotes:    make(map[uint32]mapVoteChoice),
+		lifeRepairs: make(map[uint64]time.Time),
+		rng:         rand.New(rand.NewSource(time.Now().UnixNano())),
 	}
 
 	return s
@@ -143,7 +152,7 @@ func (s *Server) GameDuration() time.Duration {
 func (s *Server) Connect(sessionId uint32) (*Client, <-chan bool) {
 	existing := s.Clients.GetClientByID(sessionId)
 	if existing != nil {
-		log.Error().Msgf("client %d already connected")
+		log.Error().Msgf("client %d already connected", existing.CN)
 		return nil, nil
 	}
 
@@ -161,7 +170,7 @@ func (s *Server) Connect(sessionId uint32) (*Client, <-chan bool) {
 	})
 
 	if client.Positions == nil {
-		log.Error().Msgf("client %d had no channels")
+		log.Error().Msgf("client %d had no channels", client.CN)
 		return nil, nil
 	}
 
@@ -302,12 +311,12 @@ func (s *Server) UniqueName(p *game.Player) string {
 func (s *Server) Spawn(client *Client) {
 	oldLifeSequence := client.LifeSequence
 	client.Spawn()
-	
+
 	// CRITICAL FIX: Set state to Alive immediately after spawn
 	// This prevents the race condition where position updates arrive
 	// before N_SPAWN confirmation on channel 1
 	client.State = playerstate.Alive
-	
+
 	log.Info().
 		Uint32("sessionID", client.SessionID).
 		Uint32("CN", client.CN).
@@ -335,7 +344,7 @@ func (s *Server) ConfirmSpawn(client *Client, lifeSequence, _weapon int32) {
 
 	// Clear spawn attempt - spawn process is complete
 	client.LastSpawnAttempt = time.Time{}
-	
+
 	// Follow original protocol: set weapon to what client confirms
 	// The client sends their CURRENT weapon choice in N_SPAWN (after any weapon switches)
 	// This ensures client-server weapon synchronization
@@ -362,7 +371,10 @@ func (s *Server) ConfirmSpawn(client *Client, lifeSequence, _weapon int32) {
 	client.Packets.Publish(P.SpawnResponse{
 		EntityState: client.ToWire(), // Now contains ALIVE state + correct life sequence
 	})
-	
+	// Send a second authoritative state snapshot as a normal server packet.
+	// This repairs browsers that retained a stale entity after a CN was reused.
+	s.Clients.Relay(client, P.Resume{[]P.ClientState{wireClientState(client)}})
+
 	log.Info().
 		Uint32("sessionID", client.SessionID).
 		Uint32("CN", client.CN).
@@ -370,7 +382,7 @@ func (s *Server) ConfirmSpawn(client *Client, lifeSequence, _weapon int32) {
 		Msg("Spawn notification sent immediately to other clients")
 
 	// THIRD: Handle competitive mode timing
-	if clock, competitive := s.GameMode.(game.Competitive); competitive {
+	if clock, competitive := s.Clock.(game.Competitive); competitive {
 		clock.Spawned(&client.Player)
 	}
 }
@@ -385,6 +397,12 @@ func (s *Server) Leave(sessionId uint32) {
 }
 
 func (s *Server) Disconnect(client *Client, reason disconnectreason.ID) {
+	delete(s.mapVotes, client.CN)
+	for key := range s.lifeRepairs {
+		if uint32(key>>32) == client.CN || uint32(key) == client.CN {
+			delete(s.lifeRepairs, key)
+		}
+	}
 	s.GameMode.Leave(&client.Player)
 	s.Clock.Leave(&client.Player)
 	s.Clients.Disconnect(client, reason)
@@ -485,6 +503,7 @@ func (s *Server) SetMap(map_ string) {
 }
 
 func (s *Server) StartGame(mode game.Mode, mapname string) {
+	s.mapVotes = make(map[uint32]mapVoteChoice)
 	if s.Clock != nil {
 		s.Clock.CleanUp()
 	}
@@ -557,6 +576,160 @@ type hit struct {
 	dir          *geom.Vector
 }
 
+func wireClientState(c *Client) P.ClientState {
+	quadMillis := int32(0)
+	if c.QuadTimer != nil {
+		quadMillis = int32(c.QuadTimer.TimeLeft() / time.Millisecond)
+	}
+	return P.ClientState{
+		Id:          int32(c.CN),
+		State:       int32(c.State),
+		Frags:       c.Frags,
+		Flags:       c.Flags,
+		Deaths:      c.Deaths,
+		Quadmillis:  quadMillis,
+		EntityState: c.ToWire(),
+	}
+}
+
+// sendAuthoritativePlayerState forcibly replaces a potentially stale remote
+// entity in one browser. The disconnect/init/resume sequence is deliberate:
+// web clients can retain an old player object when a client number is reused
+// while moving between integrated rooms.
+func (s *Server) sendAuthoritativePlayerState(receiver, target *Client, reset bool) {
+	if receiver == nil || target == nil || receiver == target {
+		return
+	}
+
+	messages := make([]P.Message, 0, 5)
+	if reset {
+		messages = append(messages,
+			P.ClientDisconnected{int32(target.CN)},
+			P.InitClient{int32(target.CN), target.Name, target.Team.Name, int32(target.Model)},
+			P.SetTeam{int32(target.CN), target.Team.Name, -1},
+		)
+	}
+	messages = append(messages, P.Resume{[]P.ClientState{wireClientState(target)}})
+	if target.State == playerstate.Spectator {
+		messages = append(messages, P.Spectator{int32(target.CN), true})
+	}
+	receiver.Send(messages...)
+}
+
+// acceptOrRepairLifeSequence handles the browser/integrated-server desync that
+// otherwise makes a visible player permanently immune to damage. The server
+// remains authoritative about whether the target is alive. A mismatch during
+// the short post-death window is rejected; established live targets are
+// repaired and the hit is accepted because this protocol already relies on the
+// shooter's client for hit detection.
+func (s *Server) acceptOrRepairLifeSequence(attacker, target *Client, observed int32, kind string) bool {
+	if target.LifeSequence == observed {
+		return true
+	}
+	if target.State != playerstate.Alive {
+		return false
+	}
+
+	now := time.Now()
+	key := uint64(attacker.CN)<<32 | uint64(target.CN)
+	if last, ok := s.lifeRepairs[key]; !ok || now.Sub(last) >= 2*time.Second {
+		s.lifeRepairs[key] = now
+		s.sendAuthoritativePlayerState(attacker, target, true)
+		log.Warn().
+			Str("kind", kind).
+			Uint32("attackerCN", attacker.CN).
+			Uint32("targetCN", target.CN).
+			Int32("observedLifeSequence", observed).
+			Int32("authoritativeLifeSequence", target.LifeSequence).
+			Msg("Repaired stale remote life sequence")
+	}
+
+	// Do not allow an old shot from the previous life to land immediately after
+	// a respawn. After this grace period, accepting the hit is safer than leaving
+	// the current live player permanently invulnerable.
+	if !target.LastDeath.IsZero() && now.Sub(target.LastDeath) < 750*time.Millisecond {
+		return false
+	}
+	return true
+}
+
+func supportedVoteMode(mode gamemode.ID) bool {
+	switch mode {
+	case gamemode.FFA, gamemode.Insta, gamemode.Effic, gamemode.CTF:
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *Server) voteMapAllowed(mapname string) bool {
+	if mapname == s.Map || mapname == s.DefaultMap {
+		return true
+	}
+	for _, allowed := range s.Maps {
+		if mapname == allowed {
+			return true
+		}
+	}
+	return false
+}
+
+// HandleMapVote implements a real majority vote for the modes shipped by Void
+// Arena. A solo player changes immediately; with multiple active players, more
+// than half of the non-spectators must select the same map and mode.
+func (s *Server) HandleMapVote(client *Client, mapname string, modeID gamemode.ID) {
+	if client == nil || !client.Joined || client.State == playerstate.Spectator {
+		return
+	}
+	if mapname == "" {
+		mapname = s.Map
+	}
+	if !supportedVoteMode(modeID) {
+		client.Message(cubecode.Fail(fmt.Sprintf("%s is not available in Void Arena", modeID)))
+		return
+	}
+	if !s.voteMapAllowed(mapname) {
+		client.Message(cubecode.Fail(fmt.Sprintf("map '%s' is not in this room's rotation", mapname)))
+		return
+	}
+	if modeID == gamemode.CTF && mapname != "turbine" {
+		client.Message(cubecode.Fail("capture the flag is available on turbine"))
+		return
+	}
+	if modeID == s.GameMode.ID() && mapname == s.Map {
+		client.Message("that match is already running")
+		return
+	}
+
+	choice := mapVoteChoice{Map: mapname, Mode: modeID}
+	s.mapVotes[client.CN] = choice
+
+	players := 0
+	matching := 0
+	s.Clients.ForEach(func(candidate *Client) {
+		if !candidate.Joined || candidate.State == playerstate.Spectator {
+			return
+		}
+		players++
+		if vote, ok := s.mapVotes[candidate.CN]; ok && vote == choice {
+			matching++
+		}
+	})
+	needed := players/2 + 1
+	if needed < 1 {
+		needed = 1
+	}
+
+	if matching < needed {
+		s.Message(fmt.Sprintf("%s voted for %s on %s (%d/%d)", s.Clients.UniqueName(client), modeID, mapname, matching, needed))
+		return
+	}
+
+	s.mapVotes = make(map[uint32]mapVoteChoice)
+	s.Message(fmt.Sprintf("vote passed: %s on %s", modeID, mapname))
+	s.StartGame(s.StartMode(modeID), mapname)
+}
+
 func (s *Server) HandleShoot(client *Client, wpn weapon.Weapon, id int32, from, to *geom.Vector, hits []hit) {
 	s.Clients.Relay(
 		client,
@@ -589,8 +762,7 @@ func (s *Server) HandleShoot(client *Client, wpn weapon.Weapon, id int32, from, 
 				log.Warn().Uint32("targetSessionID", target.SessionID).Uint32("targetCN", target.CN).Int("targetState", int(target.State)).Msg("Damage rejected: target state is not Alive")
 				continue
 			}
-			if target.LifeSequence != h.lifeSequence {
-				log.Warn().Uint32("targetSessionID", target.SessionID).Uint32("targetCN", target.CN).Int32("targetLifeSequence", target.LifeSequence).Int32("hitLifeSequence", h.lifeSequence).Uint32("clientSessionID", client.SessionID).Uint32("clientCN", client.CN).Msg("Damage rejected: life sequence mismatch")
+			if !s.acceptOrRepairLifeSequence(client, target, h.lifeSequence, "direct") {
 				continue
 			}
 			if h.rays < 1 {
@@ -639,8 +811,7 @@ hits:
 			log.Warn().Uint32("targetSessionID", target.SessionID).Uint32("targetCN", target.CN).Int("targetState", int(target.State)).Msg("Explosion damage rejected: target state is not Alive")
 			continue
 		}
-		if target.LifeSequence != h.lifeSequence {
-			log.Warn().Uint32("targetSessionID", target.SessionID).Uint32("targetCN", target.CN).Int32("targetLifeSequence", target.LifeSequence).Int32("hitLifeSequence", h.lifeSequence).Uint32("clientSessionID", client.SessionID).Uint32("clientCN", client.CN).Msg("Explosion damage rejected: life sequence mismatch")
+		if !s.acceptOrRepairLifeSequence(client, target, h.lifeSequence, "explosion") {
 			continue
 		}
 		if h.distance < 0 {

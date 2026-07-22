@@ -1,7 +1,6 @@
 package gameserver
 
 import (
-	"fmt"
 	"log"
 	"time"
 
@@ -109,7 +108,7 @@ func (s *Server) HandlePacket(client *Client, channelID uint8, message P.Message
 			client.Positions.Publish(msg)
 			client.Position = mapVec(msg.State.O)
 		} else {
-			log.Printf("Position update rejected for client %d (CN: %d): client state is %d (expected Alive=%d or Editing=%d), life sequence=%d, lastSpawnAttempt.IsZero=%t", 
+			log.Printf("Position update rejected for client %d (CN: %d): client state is %d (expected Alive=%d or Editing=%d), life sequence=%d, lastSpawnAttempt.IsZero=%t",
 				client.SessionID, client.CN, client.State, playerstate.Alive, playerstate.Editing, client.LifeSequence, client.LastSpawnAttempt.IsZero())
 		}
 		return
@@ -119,7 +118,7 @@ func (s *Server) HandlePacket(client *Client, channelID uint8, message P.Message
 		if client.State == playerstate.Alive || client.State == playerstate.Editing {
 			s.relay.FlushPositionAndSend(client.CN, msg)
 		} else {
-			log.Printf("Jumppad event rejected for client %d (CN: %d): client state is %d (expected Alive or Editing)", 
+			log.Printf("Jumppad event rejected for client %d (CN: %d): client state is %d (expected Alive or Editing)",
 				client.SessionID, client.CN, client.State)
 		}
 
@@ -129,7 +128,7 @@ func (s *Server) HandlePacket(client *Client, channelID uint8, message P.Message
 		if client.State == playerstate.Alive || client.State == playerstate.Editing {
 			s.relay.FlushPositionAndSend(client.CN, msg)
 		} else {
-			log.Printf("Teleport event rejected for client %d (CN: %d): client state is %d (expected Alive or Editing)", 
+			log.Printf("Teleport event rejected for client %d (CN: %d): client state is %d (expected Alive or Editing)",
 				client.SessionID, client.CN, client.State)
 		}
 
@@ -200,7 +199,8 @@ func (s *Server) HandlePacket(client *Client, channelID uint8, message P.Message
 
 		if toggle {
 			log.Printf("Client %d (CN: %d) transitioning to spectator mode from state %d", spectator.SessionID, spectator.CN, spectator.State)
-			if client.State == playerstate.Alive {
+			delete(s.mapVotes, spectator.CN)
+			if spectator.State == playerstate.Alive {
 				s.GameMode.HandleFrag(&spectator.Player, &spectator.Player)
 			}
 			s.GameMode.Leave(&spectator.Player)
@@ -218,33 +218,7 @@ func (s *Server) HandlePacket(client *Client, channelID uint8, message P.Message
 
 	case P.N_MAPVOTE:
 		msg := message.(P.MapVote)
-
-		mapname := msg.Map
-		if mapname == "" {
-			mapname = s.Map
-		}
-
-		modeID := gamemode.ID(msg.Mode)
-
-		if !gamemode.Valid(modeID) {
-			client.Message(cubecode.Fail(fmt.Sprintf("%s is not implemented on this server", modeID)))
-			log.Println("invalid gamemode", modeID, "requested")
-			return
-		}
-
-		if s.MasterMode < mastermode.Veto {
-			client.Message(cubecode.Fail("this server does not support map voting"))
-			return
-		}
-
-		if client.Role < role.Master {
-			client.Message(cubecode.Fail("you can't do that"))
-			return
-		}
-
-		s.StartGame(s.StartMode(modeID), mapname)
-		s.Message(fmt.Sprintf("%s forced %s on %s", s.Clients.UniqueName(client), modeID, mapname))
-		log.Println(client, "forced", modeID, "on", mapname)
+		s.HandleMapVote(client, msg.Map, gamemode.ID(msg.Mode))
 
 	case P.N_PING:
 		msg := message.(P.Ping)
@@ -322,7 +296,7 @@ func (s *Server) HandlePacket(client *Client, channelID uint8, message P.Message
 
 	case P.N_TRYSPAWN:
 		if !client.Joined || client.State != playerstate.Dead || !client.LastSpawnAttempt.IsZero() || !s.GameMode.CanSpawn(&client.Player) {
-			log.Printf("Spawn attempt rejected for client %d (CN: %d): joined=%t, state=%d (expected Dead=%d), lastSpawnAttempt.IsZero=%t, canSpawn=%t", 
+			log.Printf("Spawn attempt rejected for client %d (CN: %d): joined=%t, state=%d (expected Dead=%d), lastSpawnAttempt.IsZero=%t, canSpawn=%t",
 				client.SessionID, client.CN, client.Joined, client.State, playerstate.Dead, client.LastSpawnAttempt.IsZero(), s.GameMode.CanSpawn(&client.Player))
 			return
 		}
@@ -349,12 +323,9 @@ func (s *Server) HandlePacket(client *Client, channelID uint8, message P.Message
 	case P.N_SHOOT:
 		msg := message.(P.Shoot)
 
-		log.Printf("Shoot request from client %d (CN: %d): state=%d, weapon=%d, ammo=%d", 
-			client.SessionID, client.CN, client.State, msg.Gun, client.Ammo[weapon.ID(msg.Gun)])
-
 		wpn := weapon.ByID(weapon.ID(msg.Gun))
 		if time.Now().Before(client.GunReloadEnd) || client.Ammo[wpn.ID] <= 0 {
-			log.Printf("Shoot rejected for client %d (CN: %d): reload or no ammo, ammo=%d, reloadEnd=%v", 
+			log.Printf("Shoot rejected for client %d (CN: %d): reload or no ammo, ammo=%d, reloadEnd=%v",
 				client.SessionID, client.CN, client.Ammo[wpn.ID], client.GunReloadEnd)
 			return
 		}

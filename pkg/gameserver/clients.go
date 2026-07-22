@@ -220,9 +220,9 @@ func (s *Server) SendWelcome(c *Client) {
 
 // Tells other clients that the client disconnected, giving a disconnect reason in case it's not a normal leave.
 func (cm *ClientManager) Disconnect(c *Client, reason disconnectreason.ID) {
-	log.Printf("Client %d (CN: %d) disconnecting: final state=%d, life sequence=%d, reason=%s", 
+	log.Printf("Client %d (CN: %d) disconnecting: final state=%d, life sequence=%d, reason=%s",
 		c.SessionID, c.CN, c.State, c.LifeSequence, reason.String())
-	
+
 	cm.Relay(c, P.ClientDisconnected{int32(c.CN)})
 
 	msg := ""
@@ -247,15 +247,19 @@ func (cm *ClientManager) Disconnect(c *Client, reason disconnectreason.ID) {
 
 // Informs all other clients that a client joined the game.
 func (cm *ClientManager) InformOthersOfJoin(c *Client) {
-	cm.Relay(c, P.InitClient{
-		int32(c.CN), c.Name, c.Team.Name, int32(c.Model),
-	})
-
-	if c.State == playerstate.Spectator {
-		cm.Relay(c, P.Spectator{
-			int32(c.CN), true,
-		})
+	// A web client can keep an old player object when a CN is reused across
+	// integrated rooms. Explicitly remove that entity, recreate it, and send a
+	// full authoritative snapshot before ordinary position traffic begins.
+	messages := []P.Message{
+		P.ClientDisconnected{int32(c.CN)},
+		P.InitClient{int32(c.CN), c.Name, c.Team.Name, int32(c.Model)},
+		P.SetTeam{int32(c.CN), c.Team.Name, -1},
+		P.Resume{[]P.ClientState{wireClientState(c)}},
 	}
+	if c.State == playerstate.Spectator {
+		messages = append(messages, P.Spectator{int32(c.CN), true})
+	}
+	cm.Relay(c, messages...)
 }
 
 func (s *Server) MapChange() {
