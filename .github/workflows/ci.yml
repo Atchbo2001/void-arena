@@ -50,15 +50,7 @@ jobs:
         run: ./scripts/build-builder-image
 
       - name: Build the bundled ENet library
-        run: |
-          source ./scripts/buildenv-vars
-          "$CONTAINER_CMD" run --rm \
-            --user "$HOST_UID:$HOST_GID" \
-            --env-file "$PROJECT_ROOT/docker/common.env" \
-            -v "$PROJECT_ROOT":/workspace \
-            -w /workspace/pkg/enet/enet \
-            "$IMAGE_TAG" \
-            bash -lc 'make clean && make'
+        run: make -C pkg/enet/enet clean all
 
       - name: Build assets, WebAssembly game, web client, and Go server
         env:
