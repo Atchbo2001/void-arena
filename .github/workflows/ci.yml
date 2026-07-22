@@ -54,10 +54,19 @@ jobs:
           make -C pkg/enet/enet clean
           make -C pkg/enet/enet
 
-      - name: Build assets, WebAssembly game, web client, and Go server
+      - name: Build game assets
         env:
           ASSET_MAPS: "complex dust2 turbine"
-        run: ./scripts/build assets game web server
+        run: ./scripts/build assets
+
+      - name: Build WebAssembly game engine
+        run: ./scripts/build game
+
+      - name: Build web client
+        run: ./scripts/build web
+
+      - name: Build Go multiplayer backend
+        run: ./scripts/build server
 
       - name: Verify the Linux server binary
         run: |
