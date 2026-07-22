@@ -4,7 +4,7 @@ set -euo pipefail
 
 source "$(dirname "$0")/buildenv-vars"
 
-# Build sour binary
+# Build the same production binary used by the flat Pterodactyl package.
 $CONTAINER_CMD run \
   --rm \
   --user "$HOST_UID:$HOST_GID" \
@@ -12,11 +12,18 @@ $CONTAINER_CMD run \
   -v "$PROJECT_ROOT":/workspace \
   -w /workspace \
   "$IMAGE_TAG" \
-  bash -lc 'go build -o /workspace/bin/sour ./cmd/sour'
+  bash -lc '
+    set -euo pipefail
+    mkdir -p /workspace/bin
+    go build \
+      -buildvcs=false \
+      -trimpath \
+      -tags "release embed_frontend" \
+      -o /workspace/bin/sour \
+      ./cmd/sour
+  '
 
-# Build the serve image
+# Build the serve image.
 $CONTAINER_CMD build -f "$PROJECT_ROOT/docker/serve.Dockerfile" -t sour-game:latest "$PROJECT_ROOT"
 
 echo "Built image sour-game:latest"
-
-
