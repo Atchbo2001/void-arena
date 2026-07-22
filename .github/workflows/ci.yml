@@ -50,7 +50,9 @@ jobs:
         run: ./scripts/build-builder-image
 
       - name: Build the bundled ENet library
-        run: make -C pkg/enet/enet clean all
+        run: |
+          make -C pkg/enet/enet clean
+          make -C pkg/enet/enet
 
       - name: Build assets, WebAssembly game, web client, and Go server
         env:
