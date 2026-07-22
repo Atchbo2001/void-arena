@@ -2,7 +2,7 @@
 
 This repository is the full Sour/Sauerbraten source fork. GitHub Actions compiles the game, web client, assets, and Linux backend into `void-arena-pterodactyl.zip`.
 
-Every pull request runs the same full compile and startup smoke test used for the downloadable package. A successful run is the release gate.
+Every pull request runs the same full compile and startup smoke test used for the downloadable package. A successful run is the release gate. The downloadable server is built for Linux amd64.
 
 ## Upload
 
