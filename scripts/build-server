@@ -4,7 +4,9 @@ set -euo pipefail
 
 source "$(dirname "$0")/buildenv-vars"
 
-# Build sour binary
+# Build the production Sour binary. The checkout is mounted into a container,
+# so disable Go VCS stamping (it can reject the mounted .git ownership) and
+# create the output directory explicitly on clean GitHub/Pterodactyl builds.
 $CONTAINER_CMD run \
   --rm \
   --user "$HOST_UID:$HOST_GID" \
@@ -12,6 +14,15 @@ $CONTAINER_CMD run \
   -v "$PROJECT_ROOT":/workspace \
   -w /workspace \
   "$IMAGE_TAG" \
-  bash -lc 'go build -o /workspace/bin/sour ./cmd/sour'
+  bash -lc '
+    set -euo pipefail
+    mkdir -p /workspace/bin
+    go build \
+      -buildvcs=false \
+      -trimpath \
+      -tags "release embed_frontend" \
+      -o /workspace/bin/sour \
+      ./cmd/sour
+  '
 
-echo "Successfully built sour server binary"
+echo "Successfully built Sour server binary: $PROJECT_ROOT/bin/sour"
