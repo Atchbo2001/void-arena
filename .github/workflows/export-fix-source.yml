@@ -22,10 +22,11 @@ jobs:
           lfs: true
       - name: Create source archive
         run: |
-          tar --exclude=.git --exclude=.github/workflows/export-fix-source.yml -czf ../void-arena-fix-source.tar.gz .
+          mkdir -p .tmp
+          tar --exclude=.git --exclude=.tmp --exclude=.github/workflows/export-fix-source.yml -czf .tmp/void-arena-fix-source.tar.gz .
       - name: Upload source archive
         uses: actions/upload-artifact@v4
         with:
           name: void-arena-fix-source-${{ github.sha }}
-          path: ../void-arena-fix-source.tar.gz
+          path: .tmp/void-arena-fix-source.tar.gz
           retention-days: 1
