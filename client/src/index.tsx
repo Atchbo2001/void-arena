@@ -8,13 +8,11 @@ import ReactDOM from 'react-dom'
 import {
   Center,
   ChakraProvider,
-  Button,
   extendTheme,
   Flex,
   Box,
   VStack,
   Heading,
-  Spacer,
 } from '@chakra-ui/react'
 
 import type { ThemeConfig } from '@chakra-ui/react'
@@ -97,67 +95,6 @@ const DropTarget = styled.div`
   background: var(--chakra-colors-yellow-500);
   z-index: 2;
 `
-
-const ModalBackdrop = styled.div`
-  position: fixed;
-  inset: 0;
-  z-index: 20;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(0, 0, 0, 0.76);
-  pointer-events: auto;
-`
-
-const ModalCard = styled.div`
-  width: min(92vw, 520px);
-  max-height: 88vh;
-  overflow-y: auto;
-  padding: 24px;
-  border: 1px solid rgba(255, 255, 255, 0.22);
-  border-radius: 10px;
-  background: #101318;
-  color: #fff;
-  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.55);
-
-  label { display: block; margin: 14px 0 6px; font-size: 13px; color: #cbd5e0; }
-  input, select {
-    width: 100%;
-    padding: 10px 12px;
-    border: 1px solid #3b4250;
-    border-radius: 6px;
-    background: #191e27;
-    color: #fff;
-  }
-  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-  .actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 22px; }
-  button { padding: 10px 16px; border-radius: 6px; border: 0; cursor: pointer; }
-  button.primary { background: #e8edf5; color: #111827; font-weight: 700; }
-  button.secondary { background: #2a303b; color: #fff; }
-  button:disabled { opacity: 0.55; cursor: wait; }
-`
-
-type CreateGameForm = {
-  title: string
-  mode: string
-  map: string
-  visibility: 'public' | 'password' | 'unlisted'
-  password: string
-  bots: number
-  skill: number
-  duration: number
-}
-
-const DEFAULT_CREATE_FORM: CreateGameForm = {
-  title: 'Custom Match',
-  mode: 'ffa',
-  map: 'complex',
-  visibility: 'unlisted',
-  password: '',
-  bots: 0,
-  skill: 70,
-  duration: 300,
-}
 
 const encodeCommandValue = (value: string): string => {
   const bytes = new TextEncoder().encode(value)
@@ -303,9 +240,6 @@ function App() {
     },
   })
 
-  const [createGameOpen, setCreateGameOpen] = React.useState(false)
-  const [createGameBusy, setCreateGameBusy] = React.useState(false)
-  const [createForm, setCreateForm] = React.useState<CreateGameForm>(DEFAULT_CREATE_FORM)
 
   const internalServersRef = React.useRef<string>(`newgui integrated [
         guitab "servers"
@@ -517,6 +451,208 @@ function App() {
     //   ${renderDiscordButton(authState)}
 
     const menu = `
+    // Native Sauerbraten custom-game menus. These deliberately live inside the
+    // engine GUI so cursor locking, keyboard focus, ESC, and styling all behave
+    // exactly like the rest of the game.
+    cg_mode = "ffa"
+    cg_mode_label = "Free For All"
+    cg_map = "complex"
+    cg_visibility = 2
+    cg_password = ""
+    cg_bots = 0
+    cg_skill = 70
+    cg_duration = 300
+    cg_join_target = ""
+    cg_join_password = ""
+
+    cgselectmap = [
+        cg_map = $arg1
+        showgui customgame
+    ]
+
+    gencgmapitems = [
+        looplist curmap $arg1 [
+            guibutton $curmap (concatword "cgselectmap " $curmap) "cube"
+        ]
+    ]
+
+    buildcgcustommaps = [
+        cgcustommaps = ""
+        loopfiles curmap "packages/base" "ogz" [
+            if (< (indexof $allmaps $curmap) 0) [
+                cgcustommaps = (concat $cgcustommaps (escape $curmap))
+            ]
+        ]
+        cgcustommaps = (sortlist $cgcustommaps x y [naturalsort $x $y])
+    ]
+
+    cgcreate = [
+        if (&& (= $cg_visibility 1) (< (strlen $cg_password) 3)) [
+            echo "^f3Password must be at least 3 characters."
+        ] [
+            cleargui 1
+            creategame (concatword $cg_mode "|" $cg_map "|" $cg_visibility "|" $cg_password "|" $cg_bots "|" $cg_skill "|" $cg_duration) ""
+        ]
+    ]
+
+    newgui customgame [
+        guitext "Create Custom Game" 0
+        guibar
+        guilist [
+            guilist [
+                guitext "Mode" 0
+                guibutton (concatword "  " $cg_mode_label) [showgui customgamemode] "cube"
+                guitext "Map" 0
+                guibutton (concatword "  " $cg_map) [buildcgcustommaps; showgui customgamemaps] "cube"
+                guitext "Visibility" 0
+                guiradio "Public - listed for everyone" cg_visibility 0
+                guiradio "Password protected - listed with a lock" cg_visibility 1
+                guiradio "Unlisted - join by URL or room code" cg_visibility 2
+                if (= $cg_visibility 1) [
+                    guitext "Password" 0
+                    guifield cg_password 28
+                ]
+            ]
+            guibar
+            guilist [
+                guitext (concatword "Bots: " $cg_bots) 0
+                guislider cg_bots 0 12
+                guitext (concatword "Bot skill: " $cg_skill) 0
+                guislider cg_skill 1 101
+                guitext (concatword "Round length: " $cg_duration " seconds") 0
+                guislider cg_duration 180 900
+                guistrut 1
+                guiimage (concatword "packages/base/" $cg_map ".jpg") [] 4 1 "data/cube.png" $cg_map
+            ]
+        ]
+        guibar
+        guilist [
+            guibutton "Create game" [cgcreate] "cube"
+            guibar
+            guibutton "Cancel" [cleargui 1] "exit"
+        ]
+    ] "custom game"
+
+    newgui customgamemode [
+        guilist [
+            guilist [
+                guibutton "Free For All" [cg_mode = "ffa"; cg_mode_label = "Free For All"; showgui customgame]
+                guibutton "Teamplay" [cg_mode = "teamplay"; cg_mode_label = "Teamplay"; showgui customgame]
+                guibutton "Instagib" [cg_mode = "insta"; cg_mode_label = "Instagib"; showgui customgame]
+                guibutton "Instagib Team" [cg_mode = "instateam"; cg_mode_label = "Instagib Team"; showgui customgame]
+                guibutton "Efficiency" [cg_mode = "effic"; cg_mode_label = "Efficiency"; showgui customgame]
+                guibutton "Efficiency Team" [cg_mode = "efficteam"; cg_mode_label = "Efficiency Team"; showgui customgame]
+                guibutton "Tactics" [cg_mode = "tac"; cg_mode_label = "Tactics"; showgui customgame]
+                guibutton "Tactics Team" [cg_mode = "tacteam"; cg_mode_label = "Tactics Team"; showgui customgame]
+            ]
+            guibar
+            guilist [
+                guibutton "Capture" [cg_mode = "capture"; cg_mode_label = "Capture"; showgui customgame]
+                guibutton "Regen Capture" [cg_mode = "regencapture"; cg_mode_label = "Regen Capture"; showgui customgame]
+                guibutton "CTF" [cg_mode = "ctf"; cg_mode_label = "Capture The Flag"; showgui customgame]
+                guibutton "Instagib CTF" [cg_mode = "instactf"; cg_mode_label = "Instagib CTF"; showgui customgame]
+                guibutton "Protect" [cg_mode = "protect"; cg_mode_label = "Protect"; showgui customgame]
+                guibutton "Hold" [cg_mode = "hold"; cg_mode_label = "Hold"; showgui customgame]
+                guibutton "Collect" [cg_mode = "collect"; cg_mode_label = "Collect"; showgui customgame]
+            ]
+        ]
+    ] "game mode"
+
+    newgui customgamemaps [
+        guilist [
+            guistrut 17 1
+            guilist [guistrut 15 1; gencgmapitems $ffamaps1]
+            guilist [guistrut 15 1; gencgmapitems $ffamaps2]
+            guilist [guistrut 15 1; gencgmapitems $ffamaps3]
+        ]
+        guitab "ffa 2"
+        guilist [
+            guistrut 17 1
+            guilist [guistrut 15 1; gencgmapitems $ffamaps4]
+            guilist [guistrut 15 1; gencgmapitems $ffamaps5]
+            guilist [guistrut 15 1; gencgmapitems $ffamaps6]
+        ]
+        guitab "ffa 3"
+        guilist [
+            guistrut 17 1
+            guilist [guistrut 15 1; gencgmapitems $ffamaps7]
+            guilist [guistrut 15 1; gencgmapitems $ffamaps8]
+            guilist [guistrut 15 1; gencgmapitems $ffamaps9]
+        ]
+        guitab "ffa 4"
+        guilist [
+            guistrut 17 1
+            guilist [guistrut 15 1; gencgmapitems $ffamaps10]
+            guilist [guistrut 15 1; gencgmapitems $ffamaps11]
+            guilist [guistrut 15 1]
+        ]
+        guitab "capture 1"
+        guilist [
+            guistrut 17 1
+            guilist [guistrut 15 1; gencgmapitems $capturemaps1]
+            guilist [guistrut 15 1; gencgmapitems $capturemaps2]
+            guilist [guistrut 15 1; gencgmapitems $capturemaps3]
+        ]
+        guitab "capture 2"
+        guilist [
+            guistrut 17 1
+            guilist [guistrut 15 1; gencgmapitems $capturemaps4]
+            guilist [guistrut 15 1; gencgmapitems $capturemaps5]
+            guilist [guistrut 15 1; gencgmapitems $capturemaps6]
+        ]
+        guitab "capture 3"
+        guilist [
+            guistrut 17 1
+            guilist [guistrut 15 1; gencgmapitems $capturemaps7]
+            guilist [guistrut 15 1]
+            guilist [guistrut 15 1]
+        ]
+        guitab "ctf 1"
+        guilist [
+            guistrut 17 1
+            guilist [guistrut 15 1; gencgmapitems $ctfmaps1]
+            guilist [guistrut 15 1; gencgmapitems $ctfmaps2]
+            guilist [guistrut 15 1; gencgmapitems $ctfmaps3]
+        ]
+        guitab "ctf 2"
+        guilist [
+            guistrut 17 1
+            guilist [guistrut 15 1; gencgmapitems $ctfmaps4]
+            guilist [guistrut 15 1; gencgmapitems $ctfmaps5]
+            guilist [guistrut 15 1; gencgmapitems $ctfmaps6]
+        ]
+        guitab "ctf 3"
+        guilist [
+            guistrut 17 1
+            guilist [guistrut 15 1; gencgmapitems $ctfmaps7]
+            guilist [guistrut 15 1]
+            guilist [guistrut 15 1]
+        ]
+        guitab "other"
+        guilist [
+            guistrut 17 1
+            guilist [guistrut 15 1; gencgmapitems $conceptmaps]
+            guilist [guistrut 15 1; gencgmapitems $spmaps]
+            guilist [guistrut 15 1; gencgmapitems $rpgmaps]
+        ]
+        guitab "custom"
+        guilist [
+            guistrut 17 1
+            guilist [guistrut 15 1; gencgmapitems $cgcustommaps]
+        ]
+    ] "choose map"
+
+    newgui joinpassword [
+        guitext (concatword "Password required for " $cg_join_target) 0
+        guifield cg_join_password 28
+        guibar
+        guilist [
+            guibutton "Join" [cleargui 1; join $cg_join_target $cg_join_password] "cube"
+            guibar
+            guibutton "Cancel" [cleargui 1] "exit"
+        ]
+    ] "password"
+
     newgui content [
         guibutton "mods.."  "showgui mods"
         guibutton "put mods in url.."  [js "Module.assets.modsToURL()"]
@@ -553,7 +689,7 @@ function App() {
           guibar
       ]
       guibutton "server browser.." "showgui integrated"
-      guibutton "create custom game..." [js "Module.cluster.openCreateGame()"]
+      guibutton "create custom game..." [showgui customgame]
       guibutton "random map.."  "map random"
       guibutton "content.." "showgui content"
       if ($fullscreen) [
@@ -861,46 +997,54 @@ function App() {
     }
 
     Module.cluster = {
-      openCreateGame: () => {
-        setCreateForm(DEFAULT_CREATE_FORM)
-        setCreateGameOpen(true)
-      },
-      submitCreateGame: (form: CreateGameForm) => {
+      createGame: (preset: string, mode: string) => {
         ;(async () => {
-          setCreateGameBusy(true)
           try {
-            if (form.visibility === 'password' && form.password.trim().length < 3) {
+            let gameMode = mode || preset || 'ffa'
+            let map = 'complex'
+            let visibility = 'unlisted'
+            let password = ''
+            let bots = 0
+            let skill = 70
+            let duration = 300
+
+            // Native CubeScript GUI sends one compact spec through the existing
+            // engine creategame command. Parse values from the end so passwords
+            // may contain the delimiter without corrupting the remaining fields.
+            if (preset.includes('|')) {
+              const parts = preset.split('|')
+              gameMode = parts.shift() || 'ffa'
+              map = parts.shift() || 'complex'
+              const visibilityCode = parts.shift() || '2'
+              visibility = visibilityCode === '0' ? 'public' : visibilityCode === '1' ? 'password' : 'unlisted'
+              duration = Number(parts.pop() || 300)
+              skill = Number(parts.pop() || 70)
+              bots = Number(parts.pop() || 0)
+              password = parts.join('|')
+            }
+
+            if (visibility === 'password' && password.trim().length < 3) {
               throw new Error('Password must be at least 3 characters.')
             }
+
+            const title = `${gameMode} on ${map}`
             const args = [
               'creategame',
-              form.mode,
-              form.map,
-              `visibility=${form.visibility}`,
-              `password=${encodeCommandValue(form.password)}`,
-              `bots=${form.bots}`,
-              `skill=${form.skill}`,
-              `duration=${form.duration}`,
-              `title=${encodeCommandValue(form.title)}`,
+              gameMode,
+              map,
+              `visibility=${visibility}`,
+              `password=${encodeCommandValue(password)}`,
+              `bots=${Math.max(0, Math.min(12, Math.trunc(bots)))}`,
+              `skill=${Math.max(1, Math.min(101, Math.trunc(skill)))}`,
+              `duration=${Math.max(180, Math.min(900, Math.trunc(duration)))}`,
+              `title=${encodeCommandValue(title)}`,
             ]
             await runCommand(args.join(' '))
-            setCreateGameOpen(false)
             log.success('custom game created; share the URL or room code with friends')
           } catch (e) {
             log.error(`failed to create game: ${e}`)
-          } finally {
-            setCreateGameBusy(false)
           }
         })()
-      },
-      createGame: (preset: string, mode: string) => {
-        const next = { ...DEFAULT_CREATE_FORM, mode: mode || preset || 'ffa' }
-        Module.cluster.submitCreateGame(next)
-      },
-      promptJoin: (name: string) => {
-        const password = window.prompt(`Password for ${name}:`)
-        if (password == null) return
-        Module.cluster.connect(name, password)
       },
       connect: (name: string, password: string) => {
         const target = name.length === 0 ? 'ffa' : name
@@ -911,7 +1055,8 @@ function App() {
           } catch (e) {
             const message = String(e)
             if (!password && message.toLowerCase().includes('incorrect password')) {
-              Module.cluster.promptJoin(target)
+              const safeTarget = target.replace(/[^A-Za-z0-9_-]/g, '')
+              BananaBread.execute(`cg_join_target = "${safeTarget}"; cg_join_password = ""; showgui joinpassword`)
               return
             }
             log.error(`failed to join ${target}: ${e}`)
@@ -1026,7 +1171,7 @@ function App() {
                 const bots = s.Bots > 0 ? `, ${s.Bots} bot${s.Bots === 1 ? '' : 's'}` : ''
                 const label = `${lock}${custom}${s.Alias} (^f2${s.NumClients} player${s.NumClients === 1 ? '' : 's'}${bots}^f7) - ${modeName(s.Mode)} ${s.Map}`
                 const action = s.Password
-                  ? `[js "Module.cluster.promptJoin('${s.Alias}')"]`
+                  ? `[cg_join_target = \"${s.Alias}\"; cg_join_password = \"\"; showgui joinpassword]`
                   : `[join ${s.Alias}]`
                 return `guibutton "${label}" ${action}`
               }
@@ -1222,67 +1367,6 @@ function App() {
           </Flex>
         </DropTarget>
       </FileDropper>
-      {createGameOpen && (
-        <ModalBackdrop onMouseDown={(event) => {
-          if (event.target === event.currentTarget && !createGameBusy) setCreateGameOpen(false)
-        }}>
-          <ModalCard>
-            <Heading size="md">Create custom game</Heading>
-            <label>Game name</label>
-            <input value={createForm.title} maxLength={40} onChange={(e) => setCreateForm({ ...createForm, title: e.target.value })} />
-            <div className="row">
-              <div>
-                <label>Mode</label>
-                <select value={createForm.mode} onChange={(e) => setCreateForm({ ...createForm, mode: e.target.value })}>
-                  <option value="ffa">Free For All</option>
-                  <option value="insta">Instagib</option>
-                  <option value="effic">Efficiency</option>
-                  <option value="ctf">Capture the Flag</option>
-                </select>
-              </div>
-              <div>
-                <label>Map</label>
-                <select value={createForm.map} onChange={(e) => setCreateForm({ ...createForm, map: e.target.value })}>
-                  <option value="complex">Complex</option>
-                  <option value="turbine">Turbine</option>
-                  <option value="dust2">Dust 2</option>
-                </select>
-              </div>
-            </div>
-            <label>Visibility</label>
-            <select value={createForm.visibility} onChange={(e) => setCreateForm({ ...createForm, visibility: e.target.value as CreateGameForm['visibility'] })}>
-              <option value="public">Public — listed for everyone</option>
-              <option value="password">Password protected — listed with a lock</option>
-              <option value="unlisted">Unlisted — join by shared URL/code</option>
-            </select>
-            {createForm.visibility === 'password' && (
-              <><label>Password</label><input type="password" value={createForm.password} maxLength={64} onChange={(e) => setCreateForm({ ...createForm, password: e.target.value })} /></>
-            )}
-            <div className="row">
-              <div>
-                <label>Bots</label>
-                <select value={createForm.bots} onChange={(e) => setCreateForm({ ...createForm, bots: Number(e.target.value) })}>
-                  {[0, 1, 2, 3, 4, 5, 6, 8, 10, 12].map((n) => <option key={n} value={n}>{n}</option>)}
-                </select>
-              </div>
-              <div>
-                <label>Bot skill</label>
-                <select value={createForm.skill} onChange={(e) => setCreateForm({ ...createForm, skill: Number(e.target.value) })}>
-                  <option value={45}>Easy</option><option value={65}>Normal</option><option value={80}>Hard</option><option value={95}>Brutal</option>
-                </select>
-              </div>
-            </div>
-            <label>Round length</label>
-            <select value={createForm.duration} onChange={(e) => setCreateForm({ ...createForm, duration: Number(e.target.value) })}>
-              <option value={180}>3 minutes</option><option value={300}>5 minutes</option><option value={480}>8 minutes</option><option value={600}>10 minutes</option>
-            </select>
-            <div className="actions">
-              <button className="secondary" disabled={createGameBusy} onClick={() => setCreateGameOpen(false)}>Cancel</button>
-              <button className="primary" disabled={createGameBusy} onClick={() => Module.cluster.submitCreateGame(createForm)}>{createGameBusy ? 'Creating…' : 'Create game'}</button>
-            </div>
-          </ModalCard>
-        </ModalBackdrop>
-      )}
     </OuterContainer>
   )
 }

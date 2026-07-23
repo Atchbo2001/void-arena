@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"fmt"
 	"math"
 
 	"github.com/cfoust/sour/pkg/game/constants"
@@ -330,3 +331,24 @@ func (state PhysicsState) Marshal(p *io.Packet) error {
 
 var _ io.Marshalable = (*PhysicsState)(nil)
 var _ io.Unmarshalable = (*PhysicsState)(nil)
+
+// Pos uses Sauerbraten's compact unsigned integer encoding for the client
+// number. The generic reflection decoder uses signed putint/getint for int32,
+// which happens to work for human client numbers below 128 but corrupts the
+// packet stream for AI client numbers (128+).
+func (m Pos) Marshal(p *io.Packet) error {
+	p.PutUint(uint32(m.Client))
+	return m.State.Marshal(p)
+}
+
+func (m *Pos) Unmarshal(p *io.Packet) error {
+	client, ok := p.GetUint()
+	if !ok {
+		return fmt.Errorf("error reading client number")
+	}
+	m.Client = int32(client)
+	return m.State.Unmarshal(p)
+}
+
+var _ io.Marshalable = Pos{}
+var _ io.Unmarshalable = (*Pos)(nil)
