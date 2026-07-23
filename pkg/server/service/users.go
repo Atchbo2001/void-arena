@@ -385,6 +385,10 @@ func (u *User) ConnectToServer(server *servers.GameServer, target string, should
 		u.o.Mutex.Unlock()
 	}
 
+	server.Mutex.Lock()
+	server.LastEvent = time.Now()
+	server.Mutex.Unlock()
+
 	u.Mutex.Lock()
 	u.Space = nil
 	u.Server = server

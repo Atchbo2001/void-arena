@@ -1,6 +1,8 @@
 package servers
 
 import (
+	"crypto/sha256"
+	"crypto/subtle"
 	_ "embed"
 	"time"
 
@@ -25,7 +27,11 @@ type GameServer struct {
 	// Whether this map was in our assets (ie can we send it to the client)
 	IsBuiltMap bool
 
-	Hidden bool
+	Hidden    bool
+	Listed    bool
+	Temporary bool
+	Password  [32]byte
+	Protected bool
 
 	// The last time a client connected
 	LastEvent time.Time
@@ -71,21 +77,58 @@ func (server *GameServer) Logger() zerolog.Logger {
 	return log.With().Str("server", server.Reference()).Logger()
 }
 
+func (server *GameServer) SetAccess(listed bool, password string) {
+	server.Mutex.Lock()
+	server.Listed = listed
+	server.Protected = password != ""
+	if server.Protected {
+		server.Password = sha256.Sum256([]byte(password))
+	} else {
+		server.Password = [32]byte{}
+	}
+	server.Server.Config.PasswordProtected = server.Protected
+	server.Mutex.Unlock()
+	server.RefreshServerInfo()
+}
+
+func (server *GameServer) CheckPassword(password string) bool {
+	server.Mutex.RLock()
+	protected := server.Protected
+	expected := server.Password
+	server.Mutex.RUnlock()
+	if !protected {
+		return true
+	}
+	actual := sha256.Sum256([]byte(password))
+	return subtle.ConstantTimeCompare(expected[:], actual[:]) == 1
+}
+
+func (server *GameServer) HasPassword() bool {
+	server.Mutex.RLock()
+	defer server.Mutex.RUnlock()
+	return server.Protected
+}
+
 func (server *GameServer) Shutdown() {
 	server.Cancel()
 }
 
 func (s *GameServer) GetServerInfo() *ServerInfo {
 	return &ServerInfo{
-		NumClients:   int32(s.NumClients()),
-		GamePaused:   s.Clock.Paused(),
-		GameMode:     int32(s.GameMode.ID()),
-		TimeLeft:     int32(s.Clock.TimeLeft() / time.Second),
-		MaxClients:   64,
-		PasswordMode: 0,
-		GameSpeed:    100,
-		Map:          s.Map,
-		Description:  s.Description,
+		NumClients: int32(s.NumClients()),
+		GamePaused: s.Clock.Paused(),
+		GameMode:   int32(s.GameMode.ID()),
+		TimeLeft:   int32(s.Clock.TimeLeft() / time.Second),
+		MaxClients: 64,
+		PasswordMode: func() int32 {
+			if s.HasPassword() {
+				return 5
+			}
+			return 0
+		}(),
+		GameSpeed:   100,
+		Map:         s.Map,
+		Description: s.Description,
 	}
 }
 

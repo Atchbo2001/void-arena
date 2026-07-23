@@ -63,6 +63,20 @@ func isValidMessage(c *Client, code P.MessageCode) bool {
 	return true
 }
 
+func (s *Server) ownedActor(sender *Client, cn int32) *Client {
+	if sender == nil || cn < 0 {
+		return sender
+	}
+	actor := s.Clients.GetClientByCN(uint32(cn))
+	if actor == sender {
+		return actor
+	}
+	if actor != nil && actor.IsBot && actor.Owner == sender {
+		return actor
+	}
+	return nil
+}
+
 // parses a packet and decides what to do based on the network message code at the front of the packet
 func (s *Server) HandlePacket(client *Client, channelID uint8, message P.Message) {
 	// this implementation does not support channel 2 (for coop edit purposes) yet.
@@ -101,6 +115,11 @@ func (s *Server) HandlePacket(client *Client, channelID uint8, message P.Message
 	// channel 0 traffic
 	case P.N_POS:
 		msg := message.(P.Pos)
+		actor := s.ownedActor(client, msg.Client)
+		if actor == nil {
+			return
+		}
+		client = actor
 
 		// client sending his position and movement in the world
 		// Allow position updates from both Alive players and Editing players (matches original server)
@@ -109,32 +128,80 @@ func (s *Server) HandlePacket(client *Client, channelID uint8, message P.Message
 			client.Positions.Publish(msg)
 			client.Position = mapVec(msg.State.O)
 		} else {
-			log.Printf("Position update rejected for client %d (CN: %d): client state is %d (expected Alive=%d or Editing=%d), life sequence=%d, lastSpawnAttempt.IsZero=%t", 
+			log.Printf("Position update rejected for client %d (CN: %d): client state is %d (expected Alive=%d or Editing=%d), life sequence=%d, lastSpawnAttempt.IsZero=%t",
 				client.SessionID, client.CN, client.State, playerstate.Alive, playerstate.Editing, client.LifeSequence, client.LastSpawnAttempt.IsZero())
 		}
 		return
 
 	case P.N_JUMPPAD:
 		msg := message.(P.JumpPad)
+		actor := s.ownedActor(client, msg.Client)
+		if actor == nil {
+			return
+		}
+		client = actor
 		if client.State == playerstate.Alive || client.State == playerstate.Editing {
 			s.relay.FlushPositionAndSend(client.CN, msg)
 		} else {
-			log.Printf("Jumppad event rejected for client %d (CN: %d): client state is %d (expected Alive or Editing)", 
+			log.Printf("Jumppad event rejected for client %d (CN: %d): client state is %d (expected Alive or Editing)",
 				client.SessionID, client.CN, client.State)
 		}
 
 	case P.N_TELEPORT:
 		msg := message.(P.Teleport)
+		actor := s.ownedActor(client, msg.Client)
+		if actor == nil {
+			return
+		}
+		client = actor
 
 		if client.State == playerstate.Alive || client.State == playerstate.Editing {
 			s.relay.FlushPositionAndSend(client.CN, msg)
 		} else {
-			log.Printf("Teleport event rejected for client %d (CN: %d): client state is %d (expected Alive or Editing)", 
+			log.Printf("Teleport event rejected for client %d (CN: %d): client state is %d (expected Alive or Editing)",
 				client.SessionID, client.CN, client.State)
 		}
 
-	case P.N_ADDBOT, P.N_DELBOT:
-		client.Message("bots currently not supported")
+	case P.N_ADDBOT:
+		if client.IsBot || client.Role < role.Master {
+			client.Message(cubecode.Fail("master privilege is required to add bots"))
+			return
+		}
+		msg := message.(P.AddBot)
+		if _, err := s.AddBot(client, msg.NumBots); err != nil {
+			client.Message(cubecode.Fail(err.Error()))
+			return
+		}
+		s.Config.BotCount = s.Clients.GetNumBots()
+
+	case P.N_DELBOT:
+		if client.IsBot || client.Role < role.Master {
+			client.Message(cubecode.Fail("master privilege is required to remove bots"))
+			return
+		}
+		if !s.RemoveOneBot() {
+			client.Message(cubecode.Fail("there are no bots to remove"))
+			return
+		}
+		s.Config.BotCount = s.Clients.GetNumBots()
+
+	case P.N_BOTLIMIT:
+		if client.IsBot || client.Role < role.Master {
+			return
+		}
+		limit := int(message.(P.BotLimit).Limit)
+		if limit < 0 {
+			limit = 0
+		}
+		if limit > 12 {
+			limit = 12
+		}
+		s.Config.BotCount = limit
+		s.EnsureBots(client)
+
+	case P.N_BOTBALANCE:
+		// Teams are already assigned by the active game mode when bots join.
+		client.Message("automatic bot team assignment is enabled")
 
 	// channel 1 traffic
 	case P.N_CONNECT:
@@ -322,7 +389,7 @@ func (s *Server) HandlePacket(client *Client, channelID uint8, message P.Message
 
 	case P.N_TRYSPAWN:
 		if !client.Joined || client.State != playerstate.Dead || !client.LastSpawnAttempt.IsZero() || !s.GameMode.CanSpawn(&client.Player) {
-			log.Printf("Spawn attempt rejected for client %d (CN: %d): joined=%t, state=%d (expected Dead=%d), lastSpawnAttempt.IsZero=%t, canSpawn=%t", 
+			log.Printf("Spawn attempt rejected for client %d (CN: %d): joined=%t, state=%d (expected Dead=%d), lastSpawnAttempt.IsZero=%t, canSpawn=%t",
 				client.SessionID, client.CN, client.Joined, client.State, playerstate.Dead, client.LastSpawnAttempt.IsZero(), s.GameMode.CanSpawn(&client.Player))
 			return
 		}
@@ -349,12 +416,12 @@ func (s *Server) HandlePacket(client *Client, channelID uint8, message P.Message
 	case P.N_SHOOT:
 		msg := message.(P.Shoot)
 
-		log.Printf("Shoot request from client %d (CN: %d): state=%d, weapon=%d, ammo=%d", 
+		log.Printf("Shoot request from client %d (CN: %d): state=%d, weapon=%d, ammo=%d",
 			client.SessionID, client.CN, client.State, msg.Gun, client.Ammo[weapon.ID(msg.Gun)])
 
 		wpn := weapon.ByID(weapon.ID(msg.Gun))
 		if time.Now().Before(client.GunReloadEnd) || client.Ammo[wpn.ID] <= 0 {
-			log.Printf("Shoot rejected for client %d (CN: %d): reload or no ammo, ammo=%d, reloadEnd=%v", 
+			log.Printf("Shoot rejected for client %d (CN: %d): reload or no ammo, ammo=%d, reloadEnd=%v",
 				client.SessionID, client.CN, client.Ammo[wpn.ID], client.GunReloadEnd)
 			return
 		}

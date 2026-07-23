@@ -431,17 +431,24 @@ func (c *Cluster) PollUser(ctx context.Context, user *User) {
 				Messages: processed,
 			}
 
-			timeoutCtx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
-			select {
-			case server.Incoming() <- packet:
+			// Channel 1 is reliable protocol traffic (spawn, shots, map state, chat).
+			// Never silently discard it under temporary load. Channel 0 movement is
+			// allowed a bounded wait because a newer position supersedes an old one.
+			if msg.Channel == 1 {
+				select {
+				case server.Incoming() <- packet:
+				case <-ctx.Done():
+					return
+				}
+			} else {
+				timeoutCtx, cancel := context.WithTimeout(ctx, 250*time.Millisecond)
+				select {
+				case server.Incoming() <- packet:
+				case <-timeoutCtx.Done():
+					logger.Warn().Msg("client -> server movement packet dropped under load")
+				}
 				cancel()
-			case <-timeoutCtx.Done():
-				// TODO(cfoust): 08/08/23 recover from this
-				logger.Error().
-					Msg("client -> server (sending to server timed out)")
 			}
-
-			cancel()
 
 		case msg := <-toClient:
 			packet := msg.Packet

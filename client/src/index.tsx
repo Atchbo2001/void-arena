@@ -98,6 +98,74 @@ const DropTarget = styled.div`
   z-index: 2;
 `
 
+const ModalBackdrop = styled.div`
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.76);
+  pointer-events: auto;
+`
+
+const ModalCard = styled.div`
+  width: min(92vw, 520px);
+  max-height: 88vh;
+  overflow-y: auto;
+  padding: 24px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 10px;
+  background: #101318;
+  color: #fff;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.55);
+
+  label { display: block; margin: 14px 0 6px; font-size: 13px; color: #cbd5e0; }
+  input, select {
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid #3b4250;
+    border-radius: 6px;
+    background: #191e27;
+    color: #fff;
+  }
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 22px; }
+  button { padding: 10px 16px; border-radius: 6px; border: 0; cursor: pointer; }
+  button.primary { background: #e8edf5; color: #111827; font-weight: 700; }
+  button.secondary { background: #2a303b; color: #fff; }
+  button:disabled { opacity: 0.55; cursor: wait; }
+`
+
+type CreateGameForm = {
+  title: string
+  mode: string
+  map: string
+  visibility: 'public' | 'password' | 'unlisted'
+  password: string
+  bots: number
+  skill: number
+  duration: number
+}
+
+const DEFAULT_CREATE_FORM: CreateGameForm = {
+  title: 'Custom Match',
+  mode: 'ffa',
+  map: 'complex',
+  visibility: 'unlisted',
+  password: '',
+  bots: 0,
+  skill: 70,
+  duration: 300,
+}
+
+const encodeCommandValue = (value: string): string => {
+  const bytes = new TextEncoder().encode(value)
+  let binary = ''
+  bytes.forEach((byte) => { binary += String.fromCharCode(byte) })
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+}
+
 const pushURLState = (url: string) => {
   const {
     location: { search: params },
@@ -234,6 +302,10 @@ function App() {
       [WeaponType.Pistol]: 0,
     },
   })
+
+  const [createGameOpen, setCreateGameOpen] = React.useState(false)
+  const [createGameBusy, setCreateGameBusy] = React.useState(false)
+  const [createForm, setCreateForm] = React.useState<CreateGameForm>(DEFAULT_CREATE_FORM)
 
   const internalServersRef = React.useRef<string>(`newgui integrated [
         guitab "servers"
@@ -481,7 +553,7 @@ function App() {
           guibar
       ]
       guibutton "server browser.." "showgui integrated"
-      guibutton "create private game..." "creategame ffa"
+      guibutton "create custom game..." [js "Module.cluster.openCreateGame()"]
       guibutton "random map.."  "map random"
       guibutton "content.." "showgui content"
       if ($fullscreen) [
@@ -596,6 +668,7 @@ function App() {
     Module.postLoadWorld = function () {
       loadingWorld = false
       serverEvents = [...serverEvents, ...queuedEvents]
+      queuedEvents = []
     }
     Module.addRunDependency = (file) => {
       console.log(`add ${file}`)
@@ -788,26 +861,62 @@ function App() {
     }
 
     Module.cluster = {
-      createGame: (preset: string, mode: string) => {
-        log.info('creating private game...')
+      openCreateGame: () => {
+        setCreateForm(DEFAULT_CREATE_FORM)
+        setCreateGameOpen(true)
+      },
+      submitCreateGame: (form: CreateGameForm) => {
         ;(async () => {
+          setCreateGameBusy(true)
           try {
-            console.log(`creategame ${preset} ${mode}`)
-            const result = await runCommand(`creategame ${preset} ${mode}`)
-            log.success('created game!')
+            if (form.visibility === 'password' && form.password.trim().length < 3) {
+              throw new Error('Password must be at least 3 characters.')
+            }
+            const args = [
+              'creategame',
+              form.mode,
+              form.map,
+              `visibility=${form.visibility}`,
+              `password=${encodeCommandValue(form.password)}`,
+              `bots=${form.bots}`,
+              `skill=${form.skill}`,
+              `duration=${form.duration}`,
+              `title=${encodeCommandValue(form.title)}`,
+            ]
+            await runCommand(args.join(' '))
+            setCreateGameOpen(false)
+            log.success('custom game created; share the URL or room code with friends')
           } catch (e) {
-            log.error(`failed to create private game: ${e}`)
+            log.error(`failed to create game: ${e}`)
+          } finally {
+            setCreateGameBusy(false)
           }
         })()
       },
+      createGame: (preset: string, mode: string) => {
+        const next = { ...DEFAULT_CREATE_FORM, mode: mode || preset || 'ffa' }
+        Module.cluster.submitCreateGame(next)
+      },
+      promptJoin: (name: string) => {
+        const password = window.prompt(`Password for ${name}:`)
+        if (password == null) return
+        Module.cluster.connect(name, password)
+      },
       connect: (name: string, password: string) => {
-        const Target = name.length === 0 ? 'lobby' : name
-        send(
-          CBOR.encode({
-            Op: MessageType.Connect,
-            Target,
-          })
-        )
+        const target = name.length === 0 ? 'ffa' : name
+        ;(async () => {
+          try {
+            const encoded = password ? ` ${encodeCommandValue(password)}` : ''
+            await runCommand(`join ${target}${encoded}`)
+          } catch (e) {
+            const message = String(e)
+            if (!password && message.toLowerCase().includes('incorrect password')) {
+              Module.cluster.promptJoin(target)
+              return
+            }
+            log.error(`failed to join ${target}: ${e}`)
+          }
+        })()
       },
       send: (channel: number, dataPtr: number, dataLength: number) => {
         const packet = new Uint8Array(dataLength)
@@ -911,8 +1020,16 @@ function App() {
           const builtins = (Cluster || []) as any[]
           const rows = builtins
             .map(
-              (s: any) =>
-                `guibutton "${s.Alias} (^f2${s.NumClients} player${s.NumClients === 1 ? '' : 's'}^f7) - ${modeName(s.Mode)} ${s.Map}" "join ${s.Alias}"`
+              (s: any) => {
+                const lock = s.Password ? '^f3[locked]^f7 ' : ''
+                const custom = s.Temporary ? '^f6[custom]^f7 ' : ''
+                const bots = s.Bots > 0 ? `, ${s.Bots} bot${s.Bots === 1 ? '' : 's'}` : ''
+                const label = `${lock}${custom}${s.Alias} (^f2${s.NumClients} player${s.NumClients === 1 ? '' : 's'}${bots}^f7) - ${modeName(s.Mode)} ${s.Map}`
+                const action = s.Password
+                  ? `[js "Module.cluster.promptJoin('${s.Alias}')"]`
+                  : `[join ${s.Alias}]`
+                return `guibutton "${label}" ${action}`
+              }
             )
             .join("\n")
 
@@ -998,7 +1115,7 @@ function App() {
             )
           }
           if (loadingWorld && !DELAY_AFTER_LOAD.includes(msgType)) {
-            serverEvents.push(serverMessage)
+            queuedEvents.push(serverMessage)
             return
           }
         }
@@ -1105,6 +1222,67 @@ function App() {
           </Flex>
         </DropTarget>
       </FileDropper>
+      {createGameOpen && (
+        <ModalBackdrop onMouseDown={(event) => {
+          if (event.target === event.currentTarget && !createGameBusy) setCreateGameOpen(false)
+        }}>
+          <ModalCard>
+            <Heading size="md">Create custom game</Heading>
+            <label>Game name</label>
+            <input value={createForm.title} maxLength={40} onChange={(e) => setCreateForm({ ...createForm, title: e.target.value })} />
+            <div className="row">
+              <div>
+                <label>Mode</label>
+                <select value={createForm.mode} onChange={(e) => setCreateForm({ ...createForm, mode: e.target.value })}>
+                  <option value="ffa">Free For All</option>
+                  <option value="insta">Instagib</option>
+                  <option value="effic">Efficiency</option>
+                  <option value="ctf">Capture the Flag</option>
+                </select>
+              </div>
+              <div>
+                <label>Map</label>
+                <select value={createForm.map} onChange={(e) => setCreateForm({ ...createForm, map: e.target.value })}>
+                  <option value="complex">Complex</option>
+                  <option value="turbine">Turbine</option>
+                  <option value="dust2">Dust 2</option>
+                </select>
+              </div>
+            </div>
+            <label>Visibility</label>
+            <select value={createForm.visibility} onChange={(e) => setCreateForm({ ...createForm, visibility: e.target.value as CreateGameForm['visibility'] })}>
+              <option value="public">Public — listed for everyone</option>
+              <option value="password">Password protected — listed with a lock</option>
+              <option value="unlisted">Unlisted — join by shared URL/code</option>
+            </select>
+            {createForm.visibility === 'password' && (
+              <><label>Password</label><input type="password" value={createForm.password} maxLength={64} onChange={(e) => setCreateForm({ ...createForm, password: e.target.value })} /></>
+            )}
+            <div className="row">
+              <div>
+                <label>Bots</label>
+                <select value={createForm.bots} onChange={(e) => setCreateForm({ ...createForm, bots: Number(e.target.value) })}>
+                  {[0, 1, 2, 3, 4, 5, 6, 8, 10, 12].map((n) => <option key={n} value={n}>{n}</option>)}
+                </select>
+              </div>
+              <div>
+                <label>Bot skill</label>
+                <select value={createForm.skill} onChange={(e) => setCreateForm({ ...createForm, skill: Number(e.target.value) })}>
+                  <option value={45}>Easy</option><option value={65}>Normal</option><option value={80}>Hard</option><option value={95}>Brutal</option>
+                </select>
+              </div>
+            </div>
+            <label>Round length</label>
+            <select value={createForm.duration} onChange={(e) => setCreateForm({ ...createForm, duration: Number(e.target.value) })}>
+              <option value={180}>3 minutes</option><option value={300}>5 minutes</option><option value={480}>8 minutes</option><option value={600}>10 minutes</option>
+            </select>
+            <div className="actions">
+              <button className="secondary" disabled={createGameBusy} onClick={() => setCreateGameOpen(false)}>Cancel</button>
+              <button className="primary" disabled={createGameBusy} onClick={() => Module.cluster.submitCreateGame(createForm)}>{createGameBusy ? 'Creating…' : 'Create game'}</button>
+            </div>
+          </ModalCard>
+        </ModalBackdrop>
+      )}
     </OuterContainer>
   )
 }
