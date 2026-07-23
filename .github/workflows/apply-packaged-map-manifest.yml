@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - agent/package-map-manifest
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -174,7 +175,6 @@ export const PACKAGED_MAPS = ["complex", "dust2", "turbine"] as const
               raise SystemExit(f'expected one customgamemaps block, replaced {count}')
 
           index_path.write_text(source)
-
           Path('.github/workflows/apply-packaged-map-manifest.yml').unlink()
           PY
 
@@ -189,6 +189,6 @@ export const PACKAGED_MAPS = ["complex", "dust2", "turbine"] as const
         run: |
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add .github/workflows/ci.yml client/src/index.tsx client/src/generated/packaged-maps.ts scripts/generate-packaged-map-manifest .github/workflows/apply-packaged-map-manifest.yml
+          git add -A
           git commit -m "Use packaged map manifest in native custom-game menu"
           git push origin HEAD:agent/package-map-manifest
