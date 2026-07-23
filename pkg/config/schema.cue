@@ -31,6 +31,8 @@
 	defaultMode:      "ffa" | "coop" | "insta" | "instateam" | "effic" | "efficteam" | "tac" | "tacteam" | "ctf" | "instactf" | "efficctf" | *"ffa"
 	defaultMap:       string | *"complex"
 	maps: [...string] | *[]
+	botCount: uint8 | *0
+	botSkill: uint8 | *70
 }
 
 #Preset: {

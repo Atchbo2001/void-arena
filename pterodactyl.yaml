@@ -10,20 +10,24 @@ server:
       config:
         defaultMode: "ffa"
         defaultMap: "turbine"
+        matchLength: 300
     - name: "insta-duel"
       virtual: true
       config:
         defaultMode: "insta"
         defaultMap: "turbine"
+        matchLength: 300
     - name: "default"
       default: true
       config:
         defaultMode: "ffa"
         defaultMap: "complex"
+        matchLength: 300
     - name: "ffa"
       config:
         defaultMode: "ffa"
         defaultMap: "complex"
+        matchLength: 300
         maps:
           - "turbine"
           - "complex"
@@ -32,6 +36,7 @@ server:
       config:
         defaultMode: "insta"
         defaultMap: "complex"
+        matchLength: 300
         maps:
           - "turbine"
           - "complex"
@@ -40,28 +45,55 @@ server:
       config:
         defaultMode: "insta"
         defaultMap: "dust2"
+        matchLength: 300
         maps:
           - "dust2"
     - name: "ffa-dust2"
       config:
         defaultMode: "ffa"
         defaultMap: "dust2"
+        matchLength: 300
         maps:
           - "dust2"
     - name: "ctf"
       config:
         defaultMode: "ctf"
         defaultMap: "dust2"
+        matchLength: 300
         maps:
           - "dust2"
     - name: "effic"
       config:
         defaultMode: "effic"
         defaultMap: "dust2"
+        matchLength: 300
         maps:
           - "dust2"
           - "complex"
           - "turbine"
+
+    - name: "ffa-bots"
+      config:
+        defaultMode: "ffa"
+        defaultMap: "complex"
+        matchLength: 300
+        botCount: 5
+        botSkill: 70
+        maps:
+          - "turbine"
+          - "complex"
+          - "dust2"
+    - name: "insta-bots"
+      config:
+        defaultMode: "insta"
+        defaultMap: "turbine"
+        matchLength: 300
+        botCount: 4
+        botSkill: 78
+        maps:
+          - "turbine"
+          - "complex"
+          - "dust2"
 
   ingress:
     desktop:
@@ -105,6 +137,15 @@ server:
       config:
         alias: "effic"
         description: "Efficiency"
+
+    - preset: "ffa-bots"
+      config:
+        alias: "ffa-bots"
+        description: "FFA vs Bots"
+    - preset: "insta-bots"
+      config:
+        alias: "insta-bots"
+        description: "Instagib vs Bots"
 
 client:
   assets:

@@ -46,6 +46,61 @@ func (cm *ClientManager) Add(sessionId uint32, outgoing Outgoing) *Client {
 	return c
 }
 
+func (cm *ClientManager) AddBot(owner *Client, skill int32, model int32, name string) (*Client, error) {
+	cm.mutex.Lock()
+	defer cm.mutex.Unlock()
+
+	taken := make(map[uint32]struct{}, len(cm.clients))
+	for _, client := range cm.clients {
+		taken[client.CN] = struct{}{}
+	}
+
+	var cn uint32
+	found := false
+	for candidate := uint32(128); candidate < 160; candidate++ {
+		if _, exists := taken[candidate]; !exists {
+			cn = candidate
+			found = true
+			break
+		}
+	}
+	if !found {
+		return nil, fmt.Errorf("bot limit reached")
+	}
+
+	bot := NewBot(cn, owner, skill, model, name)
+	cm.clients = append(cm.clients, bot)
+	return bot, nil
+}
+
+func (cm *ClientManager) Bots() []*Client {
+	cm.mutex.RLock()
+	defer cm.mutex.RUnlock()
+	bots := make([]*Client, 0)
+	for _, client := range cm.clients {
+		if client.IsBot {
+			bots = append(bots, client)
+		}
+	}
+	return bots
+}
+
+func (cm *ClientManager) HumanClients() []*Client {
+	cm.mutex.RLock()
+	defer cm.mutex.RUnlock()
+	clients := make([]*Client, 0)
+	for _, client := range cm.clients {
+		if !client.IsBot {
+			clients = append(clients, client)
+		}
+	}
+	return clients
+}
+
+func (cm *ClientManager) GetNumBots() int {
+	return len(cm.Bots())
+}
+
 func (cm *ClientManager) GetClientByCN(cn uint32) *Client {
 	cm.mutex.RLock()
 	defer cm.mutex.RUnlock()
@@ -63,7 +118,7 @@ func (cm *ClientManager) GetClientByID(sessionId uint32) *Client {
 	defer cm.mutex.RUnlock()
 
 	for _, client := range cm.clients {
-		if client.SessionID == sessionId {
+		if !client.IsBot && client.SessionID == sessionId {
 			return client
 		}
 	}
@@ -108,6 +163,9 @@ func (cm *ClientManager) broadcast(exclude func(*Client) bool, messages ...P.Mes
 	cm.broadcasts.Publish(messages)
 
 	for _, c := range cm.clients {
+		if c.IsBot {
+			continue
+		}
 		if exclude != nil && exclude(c) {
 			continue
 		}
@@ -118,7 +176,10 @@ func (cm *ClientManager) broadcast(exclude func(*Client) bool, messages ...P.Mes
 
 func exclude(c *Client) func(*Client) bool {
 	return func(_c *Client) bool {
-		return _c == c
+		if _c == c {
+			return true
+		}
+		return c != nil && c.IsBot && c.Owner == _c
 	}
 }
 
@@ -208,11 +269,28 @@ func (s *Server) SendWelcome(c *Client) {
 
 	// send other client's state (name, team, playermodel)
 	for _, client := range s.Clients.clients {
-		if client != c {
-			messages = append(messages, P.InitClient{
-				int32(client.CN), client.Name, client.Team.Name, int32(client.Model),
-			})
+		if client == c {
+			continue
 		}
+		if client.IsBot {
+			ownerCN := int32(-1)
+			if client.Owner != nil {
+				ownerCN = int32(client.Owner.CN)
+			}
+			messages = append(messages, P.InitAI{
+				Aiclientnum:    int32(client.CN),
+				Ownerclientnum: ownerCN,
+				Aitype:         1,
+				Aiskill:        client.BotSkill,
+				Playermodel:    int32(client.Model),
+				Name:           client.Name,
+				Team:           client.Team.Name,
+			})
+			continue
+		}
+		messages = append(messages, P.InitClient{
+			int32(client.CN), client.Name, client.Team.Name, int32(client.Model),
+		})
 	}
 
 	c.Send(messages...)
@@ -220,9 +298,9 @@ func (s *Server) SendWelcome(c *Client) {
 
 // Tells other clients that the client disconnected, giving a disconnect reason in case it's not a normal leave.
 func (cm *ClientManager) Disconnect(c *Client, reason disconnectreason.ID) {
-	log.Printf("Client %d (CN: %d) disconnecting: final state=%d, life sequence=%d, reason=%s", 
+	log.Printf("Client %d (CN: %d) disconnecting: final state=%d, life sequence=%d, reason=%s",
 		c.SessionID, c.CN, c.State, c.LifeSequence, reason.String())
-	
+
 	cm.Relay(c, P.ClientDisconnected{int32(c.CN)})
 
 	msg := ""
@@ -247,6 +325,22 @@ func (cm *ClientManager) Disconnect(c *Client, reason disconnectreason.ID) {
 
 // Informs all other clients that a client joined the game.
 func (cm *ClientManager) InformOthersOfJoin(c *Client) {
+	if c.IsBot {
+		ownerCN := int32(-1)
+		if c.Owner != nil {
+			ownerCN = int32(c.Owner.CN)
+		}
+		cm.Broadcast(P.InitAI{
+			Aiclientnum:    int32(c.CN),
+			Ownerclientnum: ownerCN,
+			Aitype:         1,
+			Aiskill:        c.BotSkill,
+			Playermodel:    int32(c.Model),
+			Name:           c.Name,
+			Team:           c.Team.Name,
+		})
+		return
+	}
 	cm.Relay(c, P.InitClient{
 		int32(c.CN), c.Name, c.Team.Name, int32(c.Model),
 	})
@@ -302,8 +396,12 @@ func (s *Server) PrivilegedUsersPacket() (P.Message, bool) {
 func (cm *ClientManager) GetNumClients() (n int) {
 	cm.mutex.RLock()
 	defer cm.mutex.RUnlock()
-
-	return len(cm.clients)
+	for _, client := range cm.clients {
+		if !client.IsBot {
+			n++
+		}
+	}
+	return n
 }
 
 func (cm *ClientManager) ForEach(do func(c *Client)) {

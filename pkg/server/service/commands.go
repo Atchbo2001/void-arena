@@ -2,16 +2,18 @@ package service
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/cfoust/sour/pkg/game"
 	"github.com/cfoust/sour/pkg/game/commands"
 	"github.com/cfoust/sour/pkg/game/constants"
-	"github.com/cfoust/sour/pkg/server/ingress"
 	"github.com/cfoust/sour/pkg/gameserver/protocol/gamemode"
+	"github.com/cfoust/sour/pkg/server/ingress"
 	"github.com/cfoust/sour/pkg/server/servers"
 
 	"github.com/repeale/fp-go/option"
@@ -52,15 +54,83 @@ func (server *Cluster) GivePrivateMatchHelp(ctx context.Context, user *User, gam
 }
 
 type CreateParams struct {
-	Map    opt.Option[string]
-	Preset opt.Option[string]
-	Mode   opt.Option[int]
+	Map             opt.Option[string]
+	Preset          opt.Option[string]
+	Mode            opt.Option[int]
+	Listed          bool
+	Password        string
+	RequirePassword bool
+	Bots            int
+	BotSkill        int
+	MatchLength     int
+	Title           string
 }
 
 func (server *Cluster) inferCreateParams(args []string) (*CreateParams, error) {
-	params := CreateParams{}
+	params := CreateParams{
+		Listed:      false,
+		Bots:        0,
+		BotSkill:    70,
+		MatchLength: 300,
+	}
+
+	decodeValue := func(value string) string {
+		decoded, err := base64.RawURLEncoding.DecodeString(value)
+		if err != nil {
+			return value
+		}
+		return string(decoded)
+	}
 
 	for _, arg := range args {
+		if key, value, ok := strings.Cut(arg, "="); ok {
+			switch key {
+			case "visibility":
+				switch value {
+				case "public":
+					params.Listed = true
+					params.Password = ""
+				case "password":
+					params.Listed = true
+					params.RequirePassword = true
+				case "unlisted":
+					params.Listed = false
+				default:
+					return nil, fmt.Errorf("invalid visibility")
+				}
+				continue
+			case "password":
+				params.Password = decodeValue(value)
+				continue
+			case "bots":
+				parsed, err := strconv.Atoi(value)
+				if err != nil || parsed < 0 || parsed > 12 {
+					return nil, fmt.Errorf("bots must be between 0 and 12")
+				}
+				params.Bots = parsed
+				continue
+			case "skill":
+				parsed, err := strconv.Atoi(value)
+				if err != nil || parsed < 1 || parsed > 101 {
+					return nil, fmt.Errorf("bot skill must be between 1 and 101")
+				}
+				params.BotSkill = parsed
+				continue
+			case "duration":
+				parsed, err := strconv.Atoi(value)
+				if err != nil || parsed < 120 || parsed > 1800 {
+					return nil, fmt.Errorf("round length must be between 120 and 1800 seconds")
+				}
+				params.MatchLength = parsed
+				continue
+			case "title":
+				params.Title = strings.TrimSpace(decodeValue(value))
+				if len(params.Title) > 40 {
+					params.Title = params.Title[:40]
+				}
+				continue
+			}
+		}
 		mode := constants.GetModeNumber(arg)
 		if opt.IsSome(mode) {
 			params.Mode = mode
@@ -82,6 +152,9 @@ func (server *Cluster) inferCreateParams(args []string) (*CreateParams, error) {
 		return nil, fmt.Errorf("argument '%s' neither corresponded to a map nor a game mode", arg)
 	}
 
+	if params.RequirePassword && len(params.Password) < 3 {
+		return nil, fmt.Errorf("password-protected games require at least 3 characters")
+	}
 	return &params, nil
 }
 
@@ -90,12 +163,13 @@ func (server *Cluster) CreateGame(ctx context.Context, params *CreateParams, use
 	server.createMutex.Lock()
 	defer server.createMutex.Unlock()
 
-	lastCreate, hasLastCreate := server.lastCreate[user.Connection.Host()]
+	creatorKey := fmt.Sprintf("user:%d", user.Id)
+	lastCreate, hasLastCreate := server.lastCreate[creatorKey]
 	if hasLastCreate && (time.Now().Sub(lastCreate)) < CREATE_SERVER_COOLDOWN {
 		return errors.New("too soon since last server create")
 	}
 
-	existingServer, hasExistingServer := server.hostServers[user.Connection.Host()]
+	existingServer, hasExistingServer := server.hostServers[creatorKey]
 	if hasExistingServer {
 		server.servers.RemoveServer(existingServer)
 	}
@@ -115,6 +189,15 @@ func (server *Cluster) CreateGame(ctx context.Context, params *CreateParams, use
 
 	logger = logger.With().Str("server", gameServer.Reference()).Logger()
 
+	gameServer.Temporary = true
+	gameServer.Config.MatchLength = params.MatchLength
+	gameServer.Config.BotCount = params.Bots
+	gameServer.Config.BotSkill = params.BotSkill
+	gameServer.SetAccess(params.Listed, params.Password)
+	if params.Title != "" {
+		gameServer.SetDescription(fmt.Sprintf("%s [%s]", params.Title, gameServer.Id))
+	}
+
 	mode := int32(params.Mode.Value)
 	if opt.IsSome(params.Mode) && !gamemode.Valid(gamemode.ID(mode)) {
 		return fmt.Errorf("game mode not yet supported")
@@ -128,8 +211,8 @@ func (server *Cluster) CreateGame(ctx context.Context, params *CreateParams, use
 		gameServer.SetMap(params.Map.Value)
 	}
 
-	server.lastCreate[user.Connection.Host()] = time.Now()
-	server.hostServers[user.Connection.Host()] = gameServer
+	server.lastCreate[creatorKey] = time.Now()
+	server.hostServers[creatorKey] = gameServer
 
 	connected, err := user.ConnectToServer(gameServer, "", false, true)
 	go server.GivePrivateMatchHelp(server.serverCtx, user, user.Server)
@@ -232,12 +315,26 @@ func (s *Cluster) registerCommands() {
 	goCommand := commands.Command{
 		Name:        "go",
 		Aliases:     []string{"join"},
-		ArgFormat:   "[name|id|alias]",
-		Description: "move to a space, server, or map by name, id, or alias",
-		Callback: func(ctx context.Context, user *User, target string) error {
+		ArgFormat:   "[name|id|alias] [password]",
+		Description: "move to a server by name, id, or alias",
+		Callback: func(ctx context.Context, user *User, args []string) error {
+			if len(args) == 0 {
+				return fmt.Errorf("missing server name")
+			}
+			target := args[0]
+			password := ""
+			if len(args) > 1 {
+				password = args[1]
+				if decoded, err := base64.RawURLEncoding.DecodeString(password); err == nil {
+					password = string(decoded)
+				}
+			}
 			for _, gameServer := range s.servers.Servers {
 				if !gameServer.IsReference(target) {
 					continue
+				}
+				if !gameServer.CheckPassword(password) {
+					return fmt.Errorf("incorrect password")
 				}
 
 				_, err := user.Connect(gameServer)
@@ -250,7 +347,7 @@ func (s *Cluster) registerCommands() {
 
 	createGameCommand := commands.Command{
 		Name:        "creategame",
-		ArgFormat:   "[coop|ffa|insta|ctf|..etc] [map]",
+		ArgFormat:   "[mode] [map] [visibility=public|password|unlisted] [password=value] [bots=0..12] [skill=1..101] [duration=seconds]",
 		Description: "create a private game for you and your friends",
 		Callback: func(ctx context.Context, user *User, args []string) error {
 			if len(args) == 0 {

@@ -237,11 +237,27 @@ func (server *Cluster) Shutdown() {
 	server.servers.Shutdown()
 }
 
-// ForEachClusterServer enumerates running built-in servers (alias, map, mode, players, description)
-func (server *Cluster) ForEachClusterServer(cb func(alias, mapName string, mode, numClients int, desc string)) {
-    server.servers.Mutex.Lock()
-    for _, gs := range server.servers.Servers {
-        cb(gs.Reference(), gs.Map, int(gs.GameMode.ID()), gs.NumClients(), gs.Description)
-    }
-    server.servers.Mutex.Unlock()
+// ForEachClusterServer enumerates local servers that opted into the browser.
+func (server *Cluster) ForEachClusterServer(cb func(info ingress.ClusterServerInfo)) {
+	server.servers.Mutex.Lock()
+	defer server.servers.Mutex.Unlock()
+	for _, gs := range server.servers.Servers {
+		gs.Mutex.RLock()
+		listed := gs.Listed
+		temporary := gs.Temporary
+		gs.Mutex.RUnlock()
+		if !listed {
+			continue
+		}
+		cb(ingress.ClusterServerInfo{
+			Alias:       gs.Reference(),
+			Map:         gs.Map,
+			Mode:        int(gs.GameMode.ID()),
+			NumClients:  gs.NumClients(),
+			Bots:        gs.Clients.GetNumBots(),
+			Description: gs.Description,
+			Password:    gs.HasPassword(),
+			Temporary:   temporary,
+		})
+	}
 }

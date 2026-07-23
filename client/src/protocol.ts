@@ -30,7 +30,7 @@ export type ServerInfo = {
 export type InfoMessage = {
   Op: MessageType.Info
   Master: ServerInfo[]
-  Cluster: { Alias: string; Map: string; Mode: number; NumClients: number; Description: string }[]
+  Cluster: { Alias: string; Map: string; Mode: number; NumClients: number; Bots: number; Description: string; Password: boolean; Temporary: boolean }[]
 }
 
 export type PacketMessage = {

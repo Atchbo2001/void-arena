@@ -16,7 +16,7 @@ const (
 )
 
 const (
-	CLIENT_MESSAGE_LIMIT int = 16
+	CLIENT_MESSAGE_LIMIT int = 256
 )
 
 // The status of the client's connection to the cluster.

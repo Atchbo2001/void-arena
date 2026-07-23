@@ -76,8 +76,8 @@ func New(ctx context.Context, conf *Config) *Server {
 		broadcasts: broadcasts,
 	}
 
-	incoming := make(chan ServerPacket)
-	outgoing := make(chan ServerPacket)
+	incoming := make(chan ServerPacket, 1024)
+	outgoing := make(chan ServerPacket, 1024)
 
 	s := &Server{
 		Session:    utils.NewSession(ctx),
@@ -112,13 +112,27 @@ func (s *Server) Poll(ctx context.Context) {
 		case <-health:
 			continue
 		case msg := <-s.incoming:
-			client := s.Clients.GetClientByID(msg.Session)
-			if client == nil {
+			owner := s.Clients.GetClientByID(msg.Session)
+			if owner == nil {
 				continue
 			}
 
+			actor := owner
 			for _, message := range msg.Messages {
-				s.HandlePacket(client, msg.Channel, message)
+				if fromAI, ok := message.(P.FromAI); ok && msg.Channel == 1 {
+					if fromAI.Qcn < 0 {
+						actor = owner
+						continue
+					}
+					candidate := s.Clients.GetClientByCN(uint32(fromAI.Qcn))
+					if candidate != nil && candidate.IsBot && candidate.Owner == owner {
+						actor = candidate
+					} else {
+						actor = owner
+					}
+					continue
+				}
+				s.HandlePacket(actor, msg.Channel, message)
 			}
 		}
 	}
@@ -170,7 +184,7 @@ func (s *Server) Connect(sessionId uint32) (*Client, <-chan bool) {
 			Client:      int32(client.CN),
 			Protocol:    P.PROTOCOL_VERSION,
 			SessionId:   int32(client.SessionID),
-			HasPassword: false, // password protection is not used by this implementation
+			HasPassword: s.Config.PasswordProtected,
 			Description: s.Description,
 			Domain:      "",
 		},
@@ -183,12 +197,15 @@ func (s *Server) Connect(sessionId uint32) (*Client, <-chan bool) {
 // scoreboard.
 func (s *Server) RefreshServerInfo() {
 	s.Clients.ForEach(func(c *Client) {
+		if c.IsBot {
+			return
+		}
 		c.Send(
 			P.ServerInfo{
 				Client:      int32(c.CN),
 				Protocol:    P.PROTOCOL_VERSION,
 				SessionId:   int32(c.SessionID),
-				HasPassword: false, // password protection is not used by this implementation
+				HasPassword: s.Config.PasswordProtected,
 				Description: s.Description,
 				Domain:      "",
 			},
@@ -285,6 +302,9 @@ func (s *Server) Join(c *Client) {
 		c.Send(flagMode.FlagsInitPacket())
 	}
 	s.Clients.InformOthersOfJoin(c)
+	if !c.IsBot {
+		s.EnsureBots(c)
+	}
 }
 
 func (s *Server) Message(message string) {
@@ -302,12 +322,13 @@ func (s *Server) UniqueName(p *game.Player) string {
 func (s *Server) Spawn(client *Client) {
 	oldLifeSequence := client.LifeSequence
 	client.Spawn()
-	
+	client.SpawnConfirmed = client.IsBot
+
 	// CRITICAL FIX: Set state to Alive immediately after spawn
 	// This prevents the race condition where position updates arrive
 	// before N_SPAWN confirmation on channel 1
 	client.State = playerstate.Alive
-	
+
 	log.Info().
 		Uint32("sessionID", client.SessionID).
 		Uint32("CN", client.CN).
@@ -335,7 +356,8 @@ func (s *Server) ConfirmSpawn(client *Client, lifeSequence, _weapon int32) {
 
 	// Clear spawn attempt - spawn process is complete
 	client.LastSpawnAttempt = time.Time{}
-	
+	client.SpawnConfirmed = true
+
 	// Follow original protocol: set weapon to what client confirms
 	// The client sends their CURRENT weapon choice in N_SPAWN (after any weapon switches)
 	// This ensures client-server weapon synchronization
@@ -362,7 +384,7 @@ func (s *Server) ConfirmSpawn(client *Client, lifeSequence, _weapon int32) {
 	client.Packets.Publish(P.SpawnResponse{
 		EntityState: client.ToWire(), // Now contains ALIVE state + correct life sequence
 	})
-	
+
 	log.Info().
 		Uint32("sessionID", client.SessionID).
 		Uint32("CN", client.CN).
@@ -372,6 +394,110 @@ func (s *Server) ConfirmSpawn(client *Client, lifeSequence, _weapon int32) {
 	// THIRD: Handle competitive mode timing
 	if clock, competitive := s.GameMode.(game.Competitive); competitive {
 		clock.Spawned(&client.Player)
+	}
+}
+
+var botNames = []string{
+	"Vector", "Nova", "Rook", "Pixel", "Comet", "Flux", "Viper", "Echo",
+	"Blitz", "Orbit", "Glitch", "Raptor", "Bolt", "Hex", "Dash", "Zero",
+}
+
+func (s *Server) AddBot(owner *Client, skill int32) (*Client, error) {
+	if owner == nil || owner.IsBot {
+		return nil, fmt.Errorf("a human player must own the bot")
+	}
+	if skill <= 0 {
+		skill = 70
+	}
+	if skill > 101 {
+		skill = 101
+	}
+	name := botNames[s.Clients.GetNumBots()%len(botNames)]
+	model := int32(s.rng.Intn(6))
+	bot, err := s.Clients.AddBot(owner, skill, model, name)
+	if err != nil {
+		return nil, err
+	}
+	bot.server = s
+	bot.Joined = true
+	bot.Positions, bot.Packets = s.relay.AddSource(bot.CN, owner.CN)
+	bot.State = playerstate.Dead
+	if teamedMode, ok := s.GameMode.(game.TeamMode); ok {
+		teamedMode.Join(&bot.Player)
+	}
+	s.Spawn(bot)
+	s.Clients.InformOthersOfJoin(bot)
+	bot.Send(P.SpawnState{Client: int32(bot.CN), EntityState: bot.ToWire()})
+	return bot, nil
+}
+
+func (s *Server) RemoveBot(bot *Client) {
+	if bot == nil || !bot.IsBot {
+		return
+	}
+	if bot.Positions != nil {
+		bot.Positions.Close()
+	}
+	if bot.Packets != nil {
+		bot.Packets.Close()
+	}
+	s.GameMode.Leave(&bot.Player)
+	s.Clock.Leave(&bot.Player)
+	s.Clients.Disconnect(bot, disconnectreason.None)
+	_ = s.relay.RemoveClient(bot.CN)
+}
+
+func (s *Server) RemoveOneBot() bool {
+	bots := s.Clients.Bots()
+	if len(bots) == 0 {
+		return false
+	}
+	s.RemoveBot(bots[len(bots)-1])
+	return true
+}
+
+func (s *Server) EnsureBots(owner *Client) {
+	desired := s.Config.BotCount
+	if desired < 0 {
+		desired = 0
+	}
+	if desired > 12 {
+		desired = 12
+	}
+	for s.Clients.GetNumBots() < desired {
+		if _, err := s.AddBot(owner, int32(s.Config.BotSkill)); err != nil {
+			owner.Message("failed to add bot: " + err.Error())
+			return
+		}
+	}
+	for s.Clients.GetNumBots() > desired {
+		if !s.RemoveOneBot() {
+			break
+		}
+	}
+}
+
+func (s *Server) ReassignBots(leaving *Client) {
+	var replacement *Client
+	for _, candidate := range s.Clients.HumanClients() {
+		if candidate != leaving {
+			replacement = candidate
+			break
+		}
+	}
+	for _, bot := range s.Clients.Bots() {
+		if bot.Owner != leaving {
+			continue
+		}
+		if replacement == nil {
+			s.RemoveBot(bot)
+			continue
+		}
+		bot.Owner = replacement
+		bot.SessionID = replacement.SessionID
+		s.relay.SetSourceOwner(bot.CN, replacement.CN)
+		s.Clients.Broadcast(P.InitAI{Aiclientnum: int32(bot.CN), Ownerclientnum: int32(replacement.CN), Aitype: 1, Aiskill: bot.BotSkill, Playermodel: int32(bot.Model), Name: bot.Name, Team: bot.Team.Name})
+		bot.Send(P.SpawnState{Client: int32(bot.CN), EntityState: bot.ToWire()})
 	}
 }
 
@@ -385,9 +511,18 @@ func (s *Server) Leave(sessionId uint32) {
 }
 
 func (s *Server) Disconnect(client *Client, reason disconnectreason.ID) {
+	if client.Positions != nil {
+		client.Positions.Close()
+	}
+	if client.Packets != nil {
+		client.Packets.Close()
+	}
 	s.GameMode.Leave(&client.Player)
 	s.Clock.Leave(&client.Player)
 	s.Clients.Disconnect(client, reason)
+	if !client.IsBot {
+		s.ReassignBots(client)
+	}
 	err := s.relay.RemoveClient(client.CN)
 	if err != nil {
 		// ZOMBIE CN PREVENTION: Even if RemoveClient fails, our resilient AddClient
@@ -445,10 +580,31 @@ func (s *Server) Empty() {
 func (s *Server) Intermission() {
 	s.Clock.Stop()
 
-	allMaps := make([]string, 0)
-	allMaps = append(allMaps, s.Maps...)
-	allMaps = append(allMaps, s.DefaultMap)
-	nextMap := allMaps[s.rng.Uint32()%uint32(len(allMaps))]
+	seen := make(map[string]struct{})
+	allMaps := make([]string, 0, len(s.Maps)+1)
+	for _, candidate := range append(append([]string{}, s.Maps...), s.DefaultMap) {
+		if candidate == "" {
+			continue
+		}
+		if _, exists := seen[candidate]; exists {
+			continue
+		}
+		seen[candidate] = struct{}{}
+		allMaps = append(allMaps, candidate)
+	}
+	if len(allMaps) == 0 {
+		allMaps = append(allMaps, s.Map)
+	}
+	choices := allMaps
+	if len(allMaps) > 1 {
+		choices = make([]string, 0, len(allMaps)-1)
+		for _, candidate := range allMaps {
+			if candidate != s.Map {
+				choices = append(choices, candidate)
+			}
+		}
+	}
+	nextMap := choices[s.rng.Intn(len(choices))]
 
 	s.pendingMapChange = time.AfterFunc(10*time.Second, func() {
 		s.StartGame(s.StartMode(s.GameMode.ID()), nextMap)
@@ -558,6 +714,10 @@ type hit struct {
 }
 
 func (s *Server) HandleShoot(client *Client, wpn weapon.Weapon, id int32, from, to *geom.Vector, hits []hit) {
+	if client == nil || client.State != playerstate.Alive || !client.SpawnConfirmed {
+		return
+	}
+
 	s.Clients.Relay(
 		client,
 		P.ShotFX{
@@ -585,7 +745,7 @@ func (s *Server) HandleShoot(client *Client, wpn weapon.Weapon, id int32, from, 
 				log.Warn().Uint32("targetCN", h.target).Uint32("clientSessionID", client.SessionID).Uint32("clientCN", client.CN).Msg("Damage rejected for non-existent target")
 				continue
 			}
-			if target.State != playerstate.Alive {
+			if target.State != playerstate.Alive || !target.SpawnConfirmed {
 				log.Warn().Uint32("targetSessionID", target.SessionID).Uint32("targetCN", target.CN).Int("targetState", int(target.State)).Msg("Damage rejected: target state is not Alive")
 				continue
 			}
@@ -616,6 +776,10 @@ func (s *Server) HandleShoot(client *Client, wpn weapon.Weapon, id int32, from, 
 }
 
 func (s *Server) HandleExplode(client *Client, millis int32, wpn weapon.Weapon, id int32, hits []hit) {
+	if client == nil || client.State != playerstate.Alive || !client.SpawnConfirmed {
+		return
+	}
+
 	// TODO: delete stored projectile
 
 	s.Clients.Relay(
@@ -635,7 +799,7 @@ hits:
 			log.Warn().Uint32("targetCN", h.target).Uint32("clientSessionID", client.SessionID).Uint32("clientCN", client.CN).Msg("Explosion damage rejected for non-existent target")
 			continue
 		}
-		if target.State != playerstate.Alive {
+		if target.State != playerstate.Alive || !target.SpawnConfirmed {
 			log.Warn().Uint32("targetSessionID", target.SessionID).Uint32("targetCN", target.CN).Int("targetState", int(target.State)).Msg("Explosion damage rejected: target state is not Alive")
 			continue
 		}

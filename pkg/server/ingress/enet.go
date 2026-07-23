@@ -22,19 +22,19 @@ type ENetClient struct {
 	host    *enet.Host
 	status  NetworkStatus
 
-	toClient       chan PacketACK
-	toServer       chan io.RawPacket
-	commands       chan ClusterCommand
-	disconnect     chan bool
+	toClient   chan PacketACK
+	toServer   chan io.RawPacket
+	commands   chan ClusterCommand
+	disconnect chan bool
 }
 
 func NewENetClient() *ENetClient {
 	return &ENetClient{
-		status:         NetworkStatusConnected,
-		toClient:       make(chan PacketACK, CLIENT_MESSAGE_LIMIT),
-		toServer:       make(chan io.RawPacket, CLIENT_MESSAGE_LIMIT),
-		commands:       make(chan ClusterCommand, CLIENT_MESSAGE_LIMIT),
-		disconnect:     make(chan bool, 1),
+		status:     NetworkStatusConnected,
+		toClient:   make(chan PacketACK, CLIENT_MESSAGE_LIMIT),
+		toServer:   make(chan io.RawPacket, CLIENT_MESSAGE_LIMIT),
+		commands:   make(chan ClusterCommand, CLIENT_MESSAGE_LIMIT),
+		disconnect: make(chan bool, 1),
 	}
 }
 

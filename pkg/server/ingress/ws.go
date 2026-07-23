@@ -47,21 +47,26 @@ type ServerInfo struct {
 // master.
 type InfoMessage struct {
 	Op int // InfoOp
-	// All of the servers from the master (real Sauerbraten servers.)
+	// Public master servers remain empty in this fork.
 	Master []ServerInfo
-	// All of the servers this cluster hosts.
-	Cluster []struct{
-		Alias       string
-		Map         string
-		Mode        int
-		NumClients  int
-		Description string
-	}
+	// Local servers that opted into this cluster's browser.
+	Cluster []ClusterServerInfo
 }
 
-// ClusterLister provides a minimal interface to enumerate built-in servers.
+type ClusterServerInfo struct {
+	Alias       string
+	Map         string
+	Mode        int
+	NumClients  int
+	Bots        int
+	Description string
+	Password    bool
+	Temporary   bool
+}
+
+// ClusterLister provides a minimal interface to enumerate local servers.
 type ClusterLister interface {
-	ForEachClusterServer(func(alias, mapName string, mode, numClients int, desc string))
+	ForEachClusterServer(func(info ClusterServerInfo))
 }
 
 // Contains a packet from the server a client is connected to.
@@ -133,25 +138,25 @@ type GenericMessage struct {
 type WSClient struct {
 	session utils.Session
 
-	host           string
-	deviceType     string
-	status         NetworkStatus
-	toClient       chan io.RawPacket
-	toServer       chan io.RawPacket
-	commands       chan ClusterCommand
-	disconnect     chan bool
-	send           chan []byte
-	closeSlow      func()
+	host       string
+	deviceType string
+	status     NetworkStatus
+	toClient   chan io.RawPacket
+	toServer   chan io.RawPacket
+	commands   chan ClusterCommand
+	disconnect chan bool
+	send       chan []byte
+	closeSlow  func()
 }
 
 func NewWSClient() *WSClient {
 	return &WSClient{
-		status:         NetworkStatusConnected,
-		toClient:       make(chan io.RawPacket, CLIENT_MESSAGE_LIMIT),
-		toServer:       make(chan io.RawPacket, CLIENT_MESSAGE_LIMIT),
-		commands:       make(chan ClusterCommand, CLIENT_MESSAGE_LIMIT),
-		send:           make(chan []byte, CLIENT_MESSAGE_LIMIT),
-		disconnect:     make(chan bool, 1),
+		status:     NetworkStatusConnected,
+		toClient:   make(chan io.RawPacket, CLIENT_MESSAGE_LIMIT),
+		toServer:   make(chan io.RawPacket, CLIENT_MESSAGE_LIMIT),
+		commands:   make(chan ClusterCommand, CLIENT_MESSAGE_LIMIT),
+		send:       make(chan []byte, CLIENT_MESSAGE_LIMIT),
+		disconnect: make(chan bool, 1),
 	}
 }
 
@@ -317,7 +322,8 @@ func (server *WSIngress) HandleClient(ctx context.Context, c *websocket.Conn, ho
 	}
 	client.send <- broadcast
 
-	receive := make(chan []byte)
+	receive := make(chan []byte, CLIENT_MESSAGE_LIMIT)
+	readErrors := make(chan error, 1)
 
 	defer func() {
 		client.disconnect <- true
@@ -331,6 +337,10 @@ func (server *WSIngress) HandleClient(ctx context.Context, c *websocket.Conn, ho
 
 			typ, message, err := c.Read(ctx)
 			if err != nil {
+				select {
+				case readErrors <- err:
+				default:
+				}
 				return
 			}
 			if typ != websocket.MessageBinary {
@@ -381,7 +391,7 @@ func (server *WSIngress) HandleClient(ctx context.Context, c *websocket.Conn, ho
 					Response: resultChannel,
 				}
 
-				ctx, cancel := context.WithTimeout(ctx, time.Second*10)
+				requestCtx, cancel := context.WithTimeout(ctx, time.Second*10)
 
 				// Go run a command, but don't block
 				go func() {
@@ -404,7 +414,7 @@ func (server *WSIngress) HandleClient(ctx context.Context, c *websocket.Conn, ho
 						bytes, _ := cbor.Marshal(packet)
 						client.send <- bytes
 						cancel()
-					case <-ctx.Done():
+					case <-requestCtx.Done():
 						// The command timed out
 						return
 					}
@@ -413,9 +423,11 @@ func (server *WSIngress) HandleClient(ctx context.Context, c *websocket.Conn, ho
 
 			var generic GenericMessage
 			err := cbor.Unmarshal(msg, &generic)
-			if err == nil && packetMessage.Op == DisconnectOp {
+			if err == nil && generic.Op == DisconnectOp {
 				client.disconnect <- true
 			}
+		case err := <-readErrors:
+			return err
 		case msg := <-client.send:
 			err := WriteTimeout(ctx, time.Second*5, c, msg)
 			if err != nil {
@@ -509,22 +521,10 @@ func (server *WSIngress) BuildBroadcast() ([]byte, error) {
 		Master: masterServers,
 	}
 
-	// Add built-in servers from this cluster in a lightweight summary
+	// Add local servers from this cluster.
 	if server.serverManager != nil {
-		server.serverManager.ForEachClusterServer(func(alias, mapName string, mode, numClients int, desc string) {
-			infoMessage.Cluster = append(infoMessage.Cluster, struct{
-				Alias       string
-				Map         string
-				Mode        int
-				NumClients  int
-				Description string
-			}{
-				Alias:       alias,
-				Map:         mapName,
-				Mode:        mode,
-				NumClients:  numClients,
-				Description: desc,
-			})
+		server.serverManager.ForEachClusterServer(func(info ClusterServerInfo) {
+			infoMessage.Cluster = append(infoMessage.Cluster, info)
 		})
 	}
 
