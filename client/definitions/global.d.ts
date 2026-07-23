@@ -110,7 +110,19 @@ type ModuleType = {
   }
 
   cluster: {
+    openCreateGame: () => void
+    submitCreateGame: (form: {
+      title: string
+      mode: string
+      map: string
+      visibility: 'public' | 'password' | 'unlisted'
+      password: string
+      bots: number
+      skill: number
+      duration: number
+    }) => void
     createGame: (preset: string, mode: string) => void
+    promptJoin: (name: string) => void
     connect: (name: string, password: string) => void
     send: (channel: number, dataPtr: number, dataLength: number) => void
     receive: (dataPtr: number, dataLengthPtr: number) => void
