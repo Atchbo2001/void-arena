@@ -6,6 +6,7 @@ import (
 	gameio "github.com/cfoust/sour/pkg/game/io"
 )
 
+// This guards the exact client-number boundary that corrupted bot traffic.
 func TestBotPositionUsesUnsignedClientNumber(t *testing.T) {
 	state := PhysicsState{
 		State:        4,
