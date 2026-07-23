@@ -28,6 +28,10 @@ type Client struct {
 	AuthRequiredBecause disconnectreason.ID // e.g. server is in private mode
 	SessionID           uint32
 	Ping                int32
+	SpawnConfirmed      bool
+	IsBot               bool
+	Owner               *Client
+	BotSkill            int32
 	Positions           *relay.Publisher
 	Packets             *relay.Publisher
 	Authentications     map[string]*Authentication
@@ -47,6 +51,22 @@ func NewClient(cn uint32, sessionId uint32, outgoing Outgoing) *Client {
 	}
 }
 
+func NewBot(cn uint32, owner *Client, skill int32, model int32, name string) *Client {
+	bot := &Client{
+		Player:          game.NewPlayer(cn),
+		SessionID:       owner.SessionID,
+		Authentications: map[string]*Authentication{},
+		outgoing:        owner.outgoing,
+		IsBot:           true,
+		Owner:           owner,
+		BotSkill:        skill,
+		SpawnConfirmed:  true,
+	}
+	bot.Name = name
+	bot.Model = model
+	return bot
+}
+
 func (c *Client) GrantMaster() {
 	c.server._setRole(c, role.Master)
 }
@@ -64,8 +84,12 @@ func (c *Client) Message(text string) {
 }
 
 func (c *Client) Send(messages ...protocol.Message) {
+	session := c.SessionID
+	if c.IsBot && c.Owner != nil {
+		session = c.Owner.SessionID
+	}
 	c.outgoing <- ServerPacket{
-		Session:  c.SessionID,
+		Session:  session,
 		Channel:  1,
 		Messages: messages,
 	}
