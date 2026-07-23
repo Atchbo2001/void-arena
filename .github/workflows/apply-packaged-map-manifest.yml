@@ -1,9 +1,9 @@
 name: Apply packaged map manifest fix
 
 on:
-  push:
+  pull_request:
     branches:
-      - agent/package-map-manifest
+      - main
   workflow_dispatch:
 
 permissions:
