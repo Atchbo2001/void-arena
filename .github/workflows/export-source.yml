@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - agent/private-games-bots-export2
+  pull_request:
+    branches:
+      - agent/private-games-bots
   workflow_dispatch:
 
 permissions:
