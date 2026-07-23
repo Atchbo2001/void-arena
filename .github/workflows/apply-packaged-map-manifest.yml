@@ -1,0 +1,194 @@
+name: Apply packaged map manifest fix
+
+on:
+  push:
+    branches:
+      - agent/package-map-manifest
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/package-map-manifest
+          fetch-depth: 0
+
+      - name: Apply native packaged-map menu fix
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          ci_path = Path('.github/workflows/ci.yml')
+          ci = ci_path.read_text()
+
+          if '    env:\n      ASSET_MAPS:' not in ci:
+              ci = ci.replace(
+                  '    timeout-minutes: 120\n    permissions:',
+                  '    timeout-minutes: 120\n    env:\n      ASSET_MAPS: "complex dust2 turbine"\n    permissions:',
+                  1,
+              )
+
+          ci = ci.replace(
+              '      - name: Build game assets\n        env:\n          ASSET_MAPS: "complex dust2 turbine"\n        run: ./scripts/build assets',
+              '      - name: Build game assets\n        run: ./scripts/build assets',
+              1,
+          )
+
+          marker = '      - name: Build WebAssembly game engine\n'
+          manifest_step = '''      - name: Generate packaged map manifest
+        run: ./scripts/generate-packaged-map-manifest
+
+'''
+          if manifest_step not in ci:
+              ci = ci.replace(marker, manifest_step + marker, 1)
+          ci_path.write_text(ci)
+
+          script_path = Path('scripts/generate-packaged-map-manifest')
+          script_path.write_text('''#!/usr/bin/env bash
+set -euo pipefail
+
+: "${ASSET_MAPS:?ASSET_MAPS must contain the maps bundled by the asset build}"
+
+python3 - <<'PYGEN'
+import json
+import os
+from pathlib import Path
+
+maps = []
+for name in os.environ["ASSET_MAPS"].split():
+    name = name.strip()
+    if name and name not in maps:
+        maps.append(name)
+
+if not maps:
+    raise SystemExit("ASSET_MAPS produced an empty packaged map manifest")
+
+out = Path("client/src/generated/packaged-maps.ts")
+out.parent.mkdir(parents=True, exist_ok=True)
+out.write_text(
+    "// Generated from ASSET_MAPS by scripts/generate-packaged-map-manifest.\\n"
+    "// Do not hand-edit; change ASSET_MAPS in .github/workflows/ci.yml.\\n"
+    f"export const PACKAGED_MAPS = {json.dumps(maps)} as const\\n"
+)
+print(f"packaged maps ({len(maps)}): {' '.join(maps)}")
+PYGEN
+''')
+          script_path.chmod(0o755)
+
+          generated = Path('client/src/generated/packaged-maps.ts')
+          generated.parent.mkdir(parents=True, exist_ok=True)
+          generated.write_text('''// Generated from ASSET_MAPS by scripts/generate-packaged-map-manifest.
+// Do not hand-edit; change ASSET_MAPS in .github/workflows/ci.yml.
+export const PACKAGED_MAPS = ["complex", "dust2", "turbine"] as const
+''')
+
+          index_path = Path('client/src/index.tsx')
+          source = index_path.read_text()
+
+          import_line = "import { PACKAGED_MAPS } from './generated/packaged-maps'\n"
+          if import_line not in source:
+              source = source.replace(
+                  "import { CONFIG } from './config'\n",
+                  "import { CONFIG } from './config'\n" + import_line,
+                  1,
+              )
+
+          if 'const PACKAGED_MAP_LIST = PACKAGED_MAPS.join(' not in source:
+              source = source.replace(
+                  'const modeName = (id: number): string => MODE_NAMES[id] ?? `mode ${id}`\n',
+                  'const modeName = (id: number): string => MODE_NAMES[id] ?? `mode ${id}`\n'
+                  "const PACKAGED_MAP_LIST = PACKAGED_MAPS.join(' ')\n",
+                  1,
+              )
+
+          source = source.replace(
+              '    cg_map = "complex"\n',
+              '    cg_packaged_maps = "${PACKAGED_MAP_LIST}"\n'
+              '    cg_map = (at $cg_packaged_maps 0)\n',
+              1,
+          )
+
+          source = re.sub(
+              r'''\n    buildcgcustommaps = \[.*?\n    \]\n\n    cgcreate = \[''',
+              '''\n    cgcreate = [''',
+              source,
+              count=1,
+              flags=re.S,
+          )
+
+          old_create = '''    cgcreate = [
+        if (&& (= $cg_visibility 1) (< (strlen $cg_password) 3)) [
+            echo "^f3Password must be at least 3 characters."
+        ] [
+            cleargui 1
+            creategame (concatword $cg_mode "|" $cg_map "|" $cg_visibility "|" $cg_password "|" $cg_bots "|" $cg_skill "|" $cg_duration) ""
+        ]
+    ]'''
+          new_create = '''    cgcreate = [
+        if (< (indexof $cg_packaged_maps $cg_map) 0) [
+            echo "^f3That map is not included in this build. Choose another map."
+        ] [
+            if (&& (= $cg_visibility 1) (< (strlen $cg_password) 3)) [
+                echo "^f3Password must be at least 3 characters."
+            ] [
+                cleargui 1
+                creategame (concatword $cg_mode "|" $cg_map "|" $cg_visibility "|" $cg_password "|" $cg_bots "|" $cg_skill "|" $cg_duration) ""
+            ]
+        ]
+    ]'''
+          if old_create not in source:
+              raise SystemExit('could not locate cgcreate block')
+          source = source.replace(old_create, new_create, 1)
+
+          source = source.replace(
+              'guibutton (concatword "  " $cg_map) [buildcgcustommaps; showgui customgamemaps] "cube"',
+              'guibutton (concatword "  " $cg_map) [showgui customgamemaps] "cube"',
+              1,
+          )
+
+          replacement_menu = '''    newgui customgamemaps [
+        guitext "Maps included in this build" 0
+        guibar
+        guilist [
+            guistrut 17 1
+            guilist [guistrut 15 1; gencgmapitems $cg_packaged_maps]
+        ]
+        guibar
+        guibutton "Back" [showgui customgame] "exit"
+    ] "choose map"'''
+
+          source, count = re.subn(
+              r'''    newgui customgamemaps \[.*?    \] "choose map"''',
+              replacement_menu,
+              source,
+              count=1,
+              flags=re.S,
+          )
+          if count != 1:
+              raise SystemExit(f'expected one customgamemaps block, replaced {count}')
+
+          index_path.write_text(source)
+
+          Path('.github/workflows/apply-packaged-map-manifest.yml').unlink()
+          PY
+
+          grep -q "PACKAGED_MAPS" client/src/index.tsx
+          grep -q 'cg_packaged_maps = "${PACKAGED_MAP_LIST}"' client/src/index.tsx
+          ! grep -q 'gencgmapitems \$ffamaps' client/src/index.tsx
+          ! grep -q 'buildcgcustommaps' client/src/index.tsx
+          test -x scripts/generate-packaged-map-manifest
+          ASSET_MAPS="complex dust2 turbine" ./scripts/generate-packaged-map-manifest
+
+      - name: Commit repair
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add .github/workflows/ci.yml client/src/index.tsx client/src/generated/packaged-maps.ts scripts/generate-packaged-map-manifest .github/workflows/apply-packaged-map-manifest.yml
+          git commit -m "Use packaged map manifest in native custom-game menu"
+          git push origin HEAD:agent/package-map-manifest
