@@ -1,54 +1,61 @@
 package relay
 
 import (
+	"sync"
+
 	"github.com/cfoust/sour/pkg/game/protocol"
-	"github.com/sasha-s/go-deadlock"
 )
 
+const publisherQueueSize = 128
+
 // Publisher provides methods to send updates to all subscribers of a certain topic.
+// It is safe to close while another goroutine is publishing.
 type Publisher struct {
 	cn          uint32
 	notifyRelay chan<- uint32
-	updates     chan<- []protocol.Message
-	closed      bool
-	mutex       deadlock.RWMutex
+	updates     chan []protocol.Message
+	done        chan struct{}
+	closeOnce   sync.Once
 }
 
 func newPublisher(cn uint32, notifyRelay chan<- uint32) (*Publisher, <-chan []protocol.Message) {
-	updates := make(chan []protocol.Message)
+	updates := make(chan []protocol.Message, publisherQueueSize)
 
 	p := &Publisher{
 		cn:          cn,
 		notifyRelay: notifyRelay,
 		updates:     updates,
+		done:        make(chan struct{}),
 	}
 
 	return p, updates
 }
 
-// Publish notifies p's broker that there is an update on p's topic and blocks
-// until the broker received the notification. Publish then blocks until the
-// broker received the update. Calling Publish() after Close() returns
-// immediately. Use p's Stop channel to know when the broker stopped listening.
+// Publish queues an update before notifying the relay. This ordering prevents a
+// disconnect race where the relay observes a notification after the source has
+// already been removed and leaves the publisher blocked forever.
 func (p *Publisher) Publish(messages ...protocol.Message) {
-	p.mutex.RLock()
-	closed := p.closed
-	p.mutex.RUnlock()
-
-	if closed {
+	if len(messages) == 0 {
 		return
 	}
 
-	p.notifyRelay <- p.cn
-	p.updates <- messages
+	copied := append([]protocol.Message(nil), messages...)
+	select {
+	case <-p.done:
+		return
+	case p.updates <- copied:
+	}
+
+	select {
+	case <-p.done:
+		return
+	case p.notifyRelay <- p.cn:
+	}
 }
 
-// Close tells the broker there will be no more updates coming from p. Calling Publish() after Close() returns immediately.
-// Calling Close() makes the broker unsubscribe all subscribers and telling them updates on the topic have ended.
+// Close makes future publishes return immediately. The update channel is not
+// closed because a concurrent sender could otherwise panic; the relay drops the
+// channel when the source is removed.
 func (p *Publisher) Close() {
-	p.mutex.Lock()
-	p.closed = true
-	p.mutex.Unlock()
-
-	close(p.updates)
+	p.closeOnce.Do(func() { close(p.done) })
 }
