@@ -1,0 +1,33 @@
+name: Export source snapshot
+
+on:
+  push:
+    branches:
+      - agent/private-games-bots-export2
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          lfs: false
+
+      - name: Create source archive
+        run: |
+          set -euo pipefail
+          git ls-files -z | tar --null -T - -czf void-arena-source.tar.gz
+
+      - name: Upload source archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: void-arena-source-${{ github.sha }}
+          path: void-arena-source.tar.gz
+          compression-level: 0
+          retention-days: 1
