@@ -1,0 +1,28 @@
+name: Export fix source
+
+on:
+  push:
+    branches:
+      - agent/fix-native-custom-games
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+      - name: Create source archive
+        run: |
+          tar --exclude=.git --exclude=.github/workflows/export-fix-source.yml -czf ../void-arena-fix-source.tar.gz .
+      - name: Upload source archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: void-arena-fix-source-${{ github.sha }}
+          path: ../void-arena-fix-source.tar.gz
+          retention-days: 1
