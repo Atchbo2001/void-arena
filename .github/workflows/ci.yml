@@ -76,27 +76,17 @@ jobs:
           if len(packaged) != len(set(packaged)):
               raise SystemExit("packaged map manifest contains duplicates")
 
-          text = Path("pterodactyl.yaml").read_text().splitlines()
+          # Validate only actual map fields. A quoted list item consisting solely
+          # of a Sauerbraten-style identifier is a map rotation entry; asset URLs
+          # and mapping entries such as '- preset:' cannot match this pattern.
           referenced = set()
-          in_maps = False
-          maps_indent = -1
-          for line in text:
-              stripped = line.strip()
-              indent = len(line) - len(line.lstrip())
-              default_match = re.fullmatch(r'defaultMap:\s*"([^"]+)"', stripped)
+          for line in Path("pterodactyl.yaml").read_text().splitlines():
+              default_match = re.fullmatch(r'\s*defaultMap:\s*"([a-z0-9_-]+)"\s*', line)
               if default_match:
                   referenced.add(default_match.group(1))
-              if stripped == "maps:":
-                  in_maps = True
-                  maps_indent = indent
-                  continue
-              if in_maps:
-                  if stripped and indent <= maps_indent:
-                      in_maps = False
-                  else:
-                      map_match = re.fullmatch(r'-\s*"([^"]+)"', stripped)
-                      if map_match:
-                          referenced.add(map_match.group(1))
+              list_match = re.fullmatch(r'\s*-\s*"([a-z0-9_-]+)"\s*', line)
+              if list_match:
+                  referenced.add(list_match.group(1))
 
           missing = sorted(referenced - set(packaged))
           if missing:
