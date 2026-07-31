@@ -76,6 +76,35 @@ func TestPublisherCloseDuringRemoveDoesNotDeadlock(t *testing.T) {
 	}
 }
 
+func TestHumanPacketsReachClientZero(t *testing.T) {
+	r := New()
+	firstMessages := make(chan delivered, 8)
+	_, _ = r.AddClient(0, func(channel uint8, payload []protocol.Message) {
+		firstMessages <- delivered{channel: channel, payload: payload}
+	})
+	secondPositions, secondPackets := r.AddClient(1, func(uint8, []protocol.Message) {})
+
+	secondPositions.Publish(protocol.Text{Text: "movement"})
+	secondPackets.Publish(protocol.Text{Text: "spawn"})
+
+	seenMovement := false
+	seenReliable := false
+	timeout := time.After(time.Second)
+	for !seenMovement || !seenReliable {
+		select {
+		case packet := <-firstMessages:
+			switch packet.channel {
+			case 0:
+				seenMovement = true
+			case 1:
+				seenReliable = true
+			}
+		case <-timeout:
+			t.Fatalf("client zero missed relayed traffic: movement=%t reliable=%t", seenMovement, seenReliable)
+		}
+	}
+}
+
 func TestBotSourceDoesNotEchoToOwner(t *testing.T) {
 	r := New()
 	ownerMessages := make(chan delivered, 2)

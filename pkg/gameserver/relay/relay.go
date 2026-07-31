@@ -232,7 +232,10 @@ func (r *Relay) flush(packets map[uint32][]protocol.Message, prefix func(uint32,
 	for _, receiverCN := range receiverCNs {
 		payload := make([]protocol.Message, 0, 64)
 		for _, senderCN := range senderCNs {
-			if senderCN == receiverCN || sourceOwners[senderCN] == receiverCN {
+			if senderCN == receiverCN {
+				continue
+			}
+			if ownerCN, hasOwner := sourceOwners[senderCN]; hasOwner && ownerCN == receiverCN {
 				continue
 			}
 			packet := packetSnapshot[senderCN]
