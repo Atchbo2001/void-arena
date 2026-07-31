@@ -33,19 +33,18 @@ import re
 from pathlib import Path
 
 
-def unique_words(name: str) -> list[str]:
-    values: list[str] = []
-    for value in os.environ.get(name, "").split():
-        value = value.strip()
-        if value and value not in values:
-            values.append(value)
-    return values
+def manifest_words(name: str) -> list[str]:
+    raw = [value.strip() for value in os.environ.get(name, "").split() if value.strip()]
+    if len(raw) != len(set(raw)):
+        duplicates = sorted({value for value in raw if raw.count(value) > 1})
+        raise SystemExit(f"{name} contains duplicate map names: {', '.join(duplicates)}")
+    return raw
 
 
-packaged = unique_words("PACKAGED_MAPS")
-ffa = unique_words("FFA_MAPS")
-capture = unique_words("CAPTURE_MAPS")
-ctf = unique_words("CTF_MAPS")
+packaged = manifest_words("PACKAGED_MAPS")
+ffa = manifest_words("FFA_MAPS")
+capture = manifest_words("CAPTURE_MAPS")
+ctf = manifest_words("CTF_MAPS")
 
 if not packaged:
     raise SystemExit("ASSET_MAPS did not contain any maps")
@@ -129,17 +128,38 @@ import json
 import os
 from pathlib import Path
 
+import cbor2
+
 
 def words(name: str) -> list[str]:
     return [value for value in os.environ.get(name, "").split() if value]
 
+
+output = Path(os.environ["MAP_OUTPUT_DIR"])
+requested = words("PACKAGED_MAPS")
+with (output / ".index.source").open("rb") as handle:
+    index = cbor2.load(handle)
+
+built = [entry["name"] for entry in index.get("maps", [])]
+missing = [name for name in requested if name not in built]
+unexpected = [name for name in built if name not in requested]
+if missing or unexpected or len(built) != len(requested):
+    details = []
+    if missing:
+        details.append("missing: " + ", ".join(missing))
+    if unexpected:
+        details.append("unexpected: " + ", ".join(unexpected))
+    if len(built) != len(requested):
+        details.append(f"requested {len(requested)} but built {len(built)}")
+    raise SystemExit("packaged map verification failed (" + "; ".join(details) + ")")
+
 manifest = {
-    "maps": words("PACKAGED_MAPS"),
+    "maps": requested,
     "ffa": words("FFA_MAPS"),
     "capture": words("CAPTURE_MAPS"),
     "ctf": words("CTF_MAPS"),
 }
-path = Path(os.environ["MAP_OUTPUT_DIR"]) / "packaged-maps.json"
+path = output / "packaged-maps.json"
 path.write_text(json.dumps(manifest, indent=2) + "\n")
-print(f"wrote {path}")
+print(f"verified all {len(built)} requested maps and wrote {path}")
 PY
