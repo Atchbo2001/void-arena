@@ -17,6 +17,11 @@ jobs:
     timeout-minutes: 120
     permissions:
       contents: read
+    env:
+      ASSET_MAPS: "complex turbine dust2 academy metl3 metl4 frostbyte gorge hades injustice lostinspace oasis paradigm phosgene ruby stronghold suburb forge reissen venice"
+      ASSET_FFA_MAPS: "complex turbine dust2 academy metl3 metl4 frostbyte gorge hades injustice lostinspace oasis paradigm phosgene ruby stronghold suburb"
+      ASSET_CAPTURE_MAPS: "dust2 forge frostbyte gorge hades lostinspace paradigm reissen ruby stronghold suburb venice"
+      ASSET_CTF_MAPS: "dust2 forge reissen stronghold suburb"
 
     steps:
       - name: Check out the full source fork
@@ -54,16 +59,78 @@ jobs:
           make -C pkg/enet/enet clean
           make -C pkg/enet/enet
 
-      - name: Build game assets
-        env:
-          ASSET_MAPS: "complex dust2 turbine"
+      - name: Build and verify curated game maps
         run: ./scripts/build assets
+
+      - name: Verify map manifest and server rotations
+        run: |
+          python3 - <<'PY'
+          import json
+          import re
+          from pathlib import Path
+
+          manifest = json.loads(Path("assets/dist/packaged-maps.json").read_text())
+          packaged = manifest["maps"]
+          if len(packaged) != 20:
+              raise SystemExit(f"expected exactly 20 packaged maps, got {len(packaged)}")
+          if len(packaged) != len(set(packaged)):
+              raise SystemExit("packaged map manifest contains duplicates")
+
+          text = Path("pterodactyl.yaml").read_text().splitlines()
+          referenced = set()
+          in_maps = False
+          maps_indent = -1
+          for line in text:
+              stripped = line.strip()
+              indent = len(line) - len(line.lstrip())
+              default_match = re.fullmatch(r'defaultMap:\s*"([^"]+)"', stripped)
+              if default_match:
+                  referenced.add(default_match.group(1))
+              if stripped == "maps:":
+                  in_maps = True
+                  maps_indent = indent
+                  continue
+              if in_maps:
+                  if stripped and indent <= maps_indent:
+                      in_maps = False
+                  else:
+                      map_match = re.fullmatch(r'-\s*"([^"]+)"', stripped)
+                      if map_match:
+                          referenced.add(map_match.group(1))
+
+          missing = sorted(referenced - set(packaged))
+          if missing:
+              raise SystemExit("server configuration references unpackaged maps: " + ", ".join(missing))
+
+          expected_categories = {
+              "ffa": 17,
+              "capture": 12,
+              "ctf": 5,
+          }
+          for category, expected in expected_categories.items():
+              actual = len(manifest[category])
+              if actual != expected:
+                  raise SystemExit(f"expected {expected} {category} maps, got {actual}")
+
+          print(f"verified {len(packaged)} real packaged maps and {len(referenced)} configured map references")
+          PY
 
       - name: Build WebAssembly game engine
         run: ./scripts/build game
 
       - name: Build web client
         run: ./scripts/build web
+
+      - name: Set up Go for multiplayer regression tests
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run multiplayer protocol and relay regressions
+        run: |
+          go test ./pkg/gameserver/relay -count=20
+          go test ./pkg/game/protocol -run TestBotPositionUsesUnsignedClientNumber -count=20
 
       - name: Build Go multiplayer backend
         run: ./scripts/build server
@@ -72,6 +139,7 @@ jobs:
         run: |
           test -x bin/sour
           test -f assets/dist/.index.source
+          test -f assets/dist/packaged-maps.json
           test -f pkg/server/static/site/index.html
           file bin/sour
           ldd bin/sour || true
@@ -116,7 +184,7 @@ jobs:
 
           cp bin/sour release/void-arena/bin/sour
           cp -a assets/dist release/void-arena/assets/dist
-          cp start.sh package.json pterodactyl.yaml PTERODACTYL.md LICENSE release/void-arena/
+          cp start.sh package.json pterodactyl.yaml PTERODACTYL.md MAPS.md LICENSE release/void-arena/
           chmod +x release/void-arena/bin/sour release/void-arena/start.sh
 
           (
