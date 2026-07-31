@@ -12,6 +12,16 @@ type delivered struct {
 	payload []protocol.Message
 }
 
+func payloadHasText(payload []protocol.Message, expected string) bool {
+	for _, message := range payload {
+		text, ok := message.(protocol.Text)
+		if ok && text.Text == expected {
+			return true
+		}
+	}
+	return false
+}
+
 func TestSingleClientPacketsAreNotReplayedToLateJoiner(t *testing.T) {
 	r := New()
 	first, _ := r.AddClient(1, func(uint8, []protocol.Message) {})
@@ -31,20 +41,10 @@ func TestSingleClientPacketsAreNotReplayedToLateJoiner(t *testing.T) {
 		if packet.channel != 1 {
 			t.Fatalf("expected channel 1, got %d", packet.channel)
 		}
-		foundFresh := false
-		for _, message := range packet.payload {
-			text, ok := message.(protocol.Text)
-			if !ok {
-				continue
-			}
-			if text.Text == "stale" {
-				t.Fatal("late joiner received stale packet")
-			}
-			if text.Text == "fresh" {
-				foundFresh = true
-			}
+		if payloadHasText(packet.payload, "stale") {
+			t.Fatal("late joiner received stale packet")
 		}
-		if !foundFresh {
+		if !payloadHasText(packet.payload, "fresh") {
 			t.Fatal("fresh packet was not delivered")
 		}
 	case <-time.After(time.Second):
@@ -95,12 +95,71 @@ func TestHumanPacketsReachClientZero(t *testing.T) {
 		case packet := <-firstMessages:
 			switch packet.channel {
 			case 0:
-				seenMovement = true
+				seenMovement = payloadHasText(packet.payload, "movement") || seenMovement
 			case 1:
-				seenReliable = true
+				seenReliable = payloadHasText(packet.payload, "spawn") || seenReliable
 			}
 		case <-timeout:
 			t.Fatalf("client zero missed relayed traffic: movement=%t reliable=%t", seenMovement, seenReliable)
+		}
+	}
+}
+
+func TestThreeHumanClientsReceiveEveryOtherReliablePacket(t *testing.T) {
+	r := New()
+	received := []chan delivered{
+		make(chan delivered, 8),
+		make(chan delivered, 8),
+		make(chan delivered, 8),
+	}
+
+	publishers := make([]*Publisher, 3)
+	for cn := uint32(0); cn < 3; cn++ {
+		index := int(cn)
+		_, publishers[index] = r.AddClient(cn, func(channel uint8, payload []protocol.Message) {
+			received[index] <- delivered{channel: channel, payload: payload}
+		})
+	}
+
+	for cn, publisher := range publishers {
+		publisher.Publish(protocol.Text{Text: "from-" + string(rune('0'+cn))})
+	}
+
+	for receiver := 0; receiver < 3; receiver++ {
+		expected := map[string]bool{}
+		for sender := 0; sender < 3; sender++ {
+			if sender != receiver {
+				expected["from-"+string(rune('0'+sender))] = false
+			}
+		}
+
+		timeout := time.After(time.Second)
+		for {
+			complete := true
+			for _, seen := range expected {
+				complete = complete && seen
+			}
+			if complete {
+				break
+			}
+
+			select {
+			case packet := <-received[receiver]:
+				if packet.channel != 1 {
+					continue
+				}
+				own := "from-" + string(rune('0'+receiver))
+				if payloadHasText(packet.payload, own) {
+					t.Fatalf("client %d received its own reliable packet", receiver)
+				}
+				for text := range expected {
+					if payloadHasText(packet.payload, text) {
+						expected[text] = true
+					}
+				}
+			case <-timeout:
+				t.Fatalf("client %d missed reliable packets: %#v", receiver, expected)
+			}
 		}
 	}
 }
