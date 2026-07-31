@@ -1,0 +1,21 @@
+name: Verify CN0 relay fix
+
+on:
+  push:
+    branches:
+      - agent/fix-cn0-relay-desync
+
+permissions:
+  contents: read
+
+jobs:
+  relay-tests:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22.x'
+          cache: true
+      - name: Run relay regressions repeatedly
+        run: go test ./pkg/gameserver/relay -run 'Test(HumanPacketsReachClientZero|BotSourceDoesNotEchoToOwner)$' -count=25
