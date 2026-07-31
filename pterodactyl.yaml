@@ -29,18 +29,46 @@ server:
         defaultMap: "complex"
         matchLength: 300
         maps:
-          - "turbine"
           - "complex"
+          - "turbine"
           - "dust2"
+          - "academy"
+          - "metl3"
+          - "metl4"
+          - "frostbyte"
+          - "gorge"
+          - "hades"
+          - "injustice"
+          - "lostinspace"
+          - "oasis"
+          - "paradigm"
+          - "phosgene"
+          - "ruby"
+          - "stronghold"
+          - "suburb"
     - name: "insta"
       config:
         defaultMode: "insta"
         defaultMap: "complex"
         matchLength: 300
         maps:
-          - "turbine"
           - "complex"
+          - "turbine"
           - "dust2"
+          - "academy"
+          - "metl3"
+          - "metl4"
+          - "frostbyte"
+          - "gorge"
+          - "hades"
+          - "injustice"
+          - "lostinspace"
+          - "oasis"
+          - "paradigm"
+          - "phosgene"
+          - "ruby"
+          - "stronghold"
+          - "suburb"
     - name: "insta-dust2"
       config:
         defaultMode: "insta"
@@ -55,6 +83,24 @@ server:
         matchLength: 300
         maps:
           - "dust2"
+    - name: "capture"
+      config:
+        defaultMode: "capture"
+        defaultMap: "dust2"
+        matchLength: 300
+        maps:
+          - "dust2"
+          - "forge"
+          - "frostbyte"
+          - "gorge"
+          - "hades"
+          - "lostinspace"
+          - "paradigm"
+          - "reissen"
+          - "ruby"
+          - "stronghold"
+          - "suburb"
+          - "venice"
     - name: "ctf"
       config:
         defaultMode: "ctf"
@@ -62,15 +108,33 @@ server:
         matchLength: 300
         maps:
           - "dust2"
+          - "forge"
+          - "reissen"
+          - "stronghold"
+          - "suburb"
     - name: "effic"
       config:
         defaultMode: "effic"
-        defaultMap: "dust2"
+        defaultMap: "complex"
         matchLength: 300
         maps:
-          - "dust2"
           - "complex"
           - "turbine"
+          - "dust2"
+          - "academy"
+          - "metl3"
+          - "metl4"
+          - "frostbyte"
+          - "gorge"
+          - "hades"
+          - "injustice"
+          - "lostinspace"
+          - "oasis"
+          - "paradigm"
+          - "phosgene"
+          - "ruby"
+          - "stronghold"
+          - "suburb"
 
     - name: "ffa-bots"
       config:
@@ -80,9 +144,16 @@ server:
         botCount: 5
         botSkill: 70
         maps:
-          - "turbine"
           - "complex"
-          - "dust2"
+          - "turbine"
+          - "academy"
+          - "metl3"
+          - "metl4"
+          - "frostbyte"
+          - "gorge"
+          - "injustice"
+          - "oasis"
+          - "phosgene"
     - name: "insta-bots"
       config:
         defaultMode: "insta"
@@ -91,9 +162,16 @@ server:
         botCount: 4
         botSkill: 78
         maps:
-          - "turbine"
           - "complex"
-          - "dust2"
+          - "turbine"
+          - "academy"
+          - "metl3"
+          - "metl4"
+          - "frostbyte"
+          - "gorge"
+          - "injustice"
+          - "oasis"
+          - "phosgene"
 
   ingress:
     desktop:
@@ -129,6 +207,10 @@ server:
       config:
         alias: "ffa-dust2"
         description: "FFA Dust 2"
+    - preset: "capture"
+      config:
+        alias: "capture"
+        description: "Capture"
     - preset: "ctf"
       config:
         alias: "ctf"
