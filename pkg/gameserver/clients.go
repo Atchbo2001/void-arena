@@ -187,6 +187,46 @@ func (cm *ClientManager) Relay(from *Client, messages ...P.Message) {
 	cm.broadcast(exclude(from), messages...)
 }
 
+func appendClientIdentity(messages []P.Message, client *Client) []P.Message {
+	if client.IsBot {
+		ownerCN := int32(-1)
+		if client.Owner != nil {
+			ownerCN = int32(client.Owner.CN)
+		}
+		return append(messages, P.InitAI{
+			Aiclientnum:    int32(client.CN),
+			Ownerclientnum: ownerCN,
+			Aitype:         1,
+			Aiskill:        client.BotSkill,
+			Playermodel:    int32(client.Model),
+			Name:           client.Name,
+			Team:           client.Team.Name,
+		})
+	}
+
+	return append(messages, P.InitClient{
+		int32(client.CN), client.Name, client.Team.Name, int32(client.Model),
+	})
+}
+
+func appendClientVisibleState(messages []P.Message, client *Client) []P.Message {
+	if client.State == playerstate.Spectator {
+		return append(messages, P.Spectator{
+			Client:     int32(client.CN),
+			Spectating: true,
+		})
+	}
+
+	if client.State == playerstate.Alive || client.State == playerstate.Editing {
+		return append(messages, P.SpawnState{
+			Client:      int32(client.CN),
+			EntityState: client.ToWire(),
+		})
+	}
+
+	return messages
+}
+
 // Sends 'welcome' information to a newly joined client like map, mode, time left, other players, etc.
 func (s *Server) SendWelcome(c *Client) {
 	messages := []P.Message{
@@ -233,6 +273,16 @@ func (s *Server) SendWelcome(c *Client) {
 		Reason: -1,
 	})
 
+	// Identity packets must arrive before resume/spawn state. Sending state first
+	// can leave late joiners with an entity state for an unknown client number,
+	// which is one of the intermittent invisible-player failure modes.
+	for _, client := range s.Clients.clients {
+		if client == c {
+			continue
+		}
+		messages = appendClientIdentity(messages, client)
+	}
+
 	// tell the client how to spawn (what health, what armour, what weapons, what ammo, etc.)
 	if c.State == playerstate.Spectator {
 		messages = append(messages, P.Spectator{
@@ -267,32 +317,6 @@ func (s *Server) SendWelcome(c *Client) {
 	}
 	messages = append(messages, resume)
 
-	// send other client's state (name, team, playermodel)
-	for _, client := range s.Clients.clients {
-		if client == c {
-			continue
-		}
-		if client.IsBot {
-			ownerCN := int32(-1)
-			if client.Owner != nil {
-				ownerCN = int32(client.Owner.CN)
-			}
-			messages = append(messages, P.InitAI{
-				Aiclientnum:    int32(client.CN),
-				Ownerclientnum: ownerCN,
-				Aitype:         1,
-				Aiskill:        client.BotSkill,
-				Playermodel:    int32(client.Model),
-				Name:           client.Name,
-				Team:           client.Team.Name,
-			})
-			continue
-		}
-		messages = append(messages, P.InitClient{
-			int32(client.CN), client.Name, client.Team.Name, int32(client.Model),
-		})
-	}
-
 	c.Send(messages...)
 }
 
@@ -325,31 +349,15 @@ func (cm *ClientManager) Disconnect(c *Client, reason disconnectreason.ID) {
 
 // Informs all other clients that a client joined the game.
 func (cm *ClientManager) InformOthersOfJoin(c *Client) {
+	messages := appendClientIdentity(nil, c)
+	messages = appendClientVisibleState(messages, c)
+
 	if c.IsBot {
-		ownerCN := int32(-1)
-		if c.Owner != nil {
-			ownerCN = int32(c.Owner.CN)
-		}
-		cm.Broadcast(P.InitAI{
-			Aiclientnum:    int32(c.CN),
-			Ownerclientnum: ownerCN,
-			Aitype:         1,
-			Aiskill:        c.BotSkill,
-			Playermodel:    int32(c.Model),
-			Name:           c.Name,
-			Team:           c.Team.Name,
-		})
+		cm.Broadcast(messages...)
 		return
 	}
-	cm.Relay(c, P.InitClient{
-		int32(c.CN), c.Name, c.Team.Name, int32(c.Model),
-	})
 
-	if c.State == playerstate.Spectator {
-		cm.Relay(c, P.Spectator{
-			int32(c.CN), true,
-		})
-	}
+	cm.Relay(c, messages...)
 }
 
 func (s *Server) MapChange() {
