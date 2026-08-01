@@ -9,33 +9,34 @@ import (
 	"github.com/cfoust/sour/pkg/gameserver/protocol/gamemode"
 	"github.com/cfoust/sour/pkg/gameserver/protocol/mastermode"
 	"github.com/cfoust/sour/pkg/gameserver/protocol/playerstate"
+	"github.com/cfoust/sour/pkg/gameserver/timer"
 	"github.com/cfoust/sour/pkg/utils"
 )
 
 type syncTestMode struct{}
 
-func (syncTestMode) ID() gamemode.ID                         { return gamemode.FFA }
-func (syncTestMode) NeedsMapInfo() bool                      { return false }
-func (syncTestMode) Leave(*servergame.Player)                {}
-func (syncTestMode) CanSpawn(*servergame.Player) bool        { return true }
-func (syncTestMode) Spawn(*servergame.PlayerState)           {}
+func (syncTestMode) ID() gamemode.ID { return gamemode.FFA }
+func (syncTestMode) NeedsMapInfo() bool { return false }
+func (syncTestMode) Leave(*servergame.Player) {}
+func (syncTestMode) CanSpawn(*servergame.Player) bool { return true }
+func (syncTestMode) Spawn(*servergame.PlayerState) {}
 func (syncTestMode) HandleFrag(*servergame.Player, *servergame.Player) {}
-func (syncTestMode) Pause()                                  {}
-func (syncTestMode) Resume()                                 {}
-func (syncTestMode) CleanUp()                                {}
+func (syncTestMode) Pause() {}
+func (syncTestMode) Resume() {}
+func (syncTestMode) CleanUp() {}
 
 type syncTestClock struct{}
 
-func (syncTestClock) Start()                                      {}
-func (syncTestClock) Pause(*servergame.Player)                    {}
-func (syncTestClock) Paused() bool                                { return false }
-func (syncTestClock) Resume(*servergame.Player)                   {}
-func (syncTestClock) Stop()                                       {}
-func (syncTestClock) Ended() bool                                 { return false }
-func (syncTestClock) TimeLeft() time.Duration                     { return 10 * time.Minute }
-func (syncTestClock) SetTimeLeft(time.Duration)                   {}
-func (syncTestClock) Leave(*servergame.Player)                    {}
-func (syncTestClock) CleanUp()                                    {}
+func (syncTestClock) Start() {}
+func (syncTestClock) Pause(*servergame.Player) {}
+func (syncTestClock) Paused() bool { return false }
+func (syncTestClock) Resume(*servergame.Player) {}
+func (syncTestClock) Stop() {}
+func (syncTestClock) Ended() bool { return false }
+func (syncTestClock) TimeLeft() time.Duration { return 10 * time.Minute }
+func (syncTestClock) SetTimeLeft(time.Duration) {}
+func (syncTestClock) Leave(*servergame.Player) {}
+func (syncTestClock) CleanUp() {}
 
 func newSyncTestClient(cn uint32, session uint32, out chan ServerPacket) *Client {
 	client := NewClient(cn, session, out)
@@ -44,6 +45,7 @@ func newSyncTestClient(cn uint32, session uint32, out chan ServerPacket) *Client
 	client.Joined = true
 	client.State = playerstate.Alive
 	client.LifeSequence = int32(cn + 1)
+	client.QuadTimer = timer.NewTimer(0)
 	return client
 }
 
@@ -134,6 +136,7 @@ func TestInformOthersOfJoinSendsVisibleBotSnapshotAbove127(t *testing.T) {
 	bot := NewBot(128, owner, 70, 2, "Vector")
 	bot.State = playerstate.Alive
 	bot.LifeSequence = 5
+	bot.QuadTimer = timer.NewTimer(0)
 
 	clients := &ClientManager{
 		clients:    []*Client{owner, other, bot},
