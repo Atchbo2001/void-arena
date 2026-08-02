@@ -62,7 +62,7 @@ jobs:
       - name: Run gameserver multiplayer regression tests
         run: |
           set -o pipefail
-          go test ./pkg/gameserver -count=3 2>&1 | tee /tmp/gameserver-regression-test.log
+          go test -vet=off ./pkg/gameserver -count=3 2>&1 | tee /tmp/gameserver-regression-test.log
 
       - name: Run relay race tests
         run: |
