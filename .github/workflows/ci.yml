@@ -54,10 +54,30 @@ jobs:
           make -C pkg/enet/enet clean
           make -C pkg/enet/enet
 
-      - name: Run multiplayer regression tests
+      - name: Run relay regression tests
         run: |
-          go test ./pkg/gameserver/relay ./pkg/gameserver -count=3
-          go test -race ./pkg/gameserver/relay -count=1
+          set -o pipefail
+          go test ./pkg/gameserver/relay -count=3 2>&1 | tee /tmp/relay-regression-test.log
+
+      - name: Run gameserver multiplayer regression tests
+        run: |
+          set -o pipefail
+          go test ./pkg/gameserver -count=3 2>&1 | tee /tmp/gameserver-regression-test.log
+
+      - name: Run relay race tests
+        run: |
+          set -o pipefail
+          go test -race ./pkg/gameserver/relay -count=1 2>&1 | tee /tmp/relay-race-test.log
+
+      - name: Upload regression test logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: void-arena-test-logs-${{ github.sha }}
+          path: /tmp/*test.log
+          if-no-files-found: ignore
+          retention-days: 7
+          compression-level: 0
 
       - name: Build game assets
         env:
