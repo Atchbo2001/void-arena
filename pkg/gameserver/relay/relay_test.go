@@ -14,9 +14,9 @@ type delivered struct {
 
 func TestSingleClientPacketsAreNotReplayedToLateJoiner(t *testing.T) {
 	r := New()
-	first, _ := r.AddClient(1, func(uint8, []protocol.Message) {})
+	_, firstPackets := r.AddClient(1, func(uint8, []protocol.Message) {})
 
-	first.Publish(protocol.Text{Text: "stale"})
+	firstPackets.Publish(protocol.Text{Text: "stale"})
 	time.Sleep(40 * time.Millisecond)
 
 	received := make(chan delivered, 4)
@@ -24,7 +24,7 @@ func TestSingleClientPacketsAreNotReplayedToLateJoiner(t *testing.T) {
 		received <- delivered{channel: channel, payload: payload}
 	})
 
-	first.Publish(protocol.Text{Text: "fresh"})
+	firstPackets.Publish(protocol.Text{Text: "fresh"})
 
 	select {
 	case packet := <-received:
