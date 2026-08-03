@@ -1,6 +1,5 @@
 name: Publish Void Arena Release
 
-# Bump this file to trigger the release publisher after the workflow exists.
 on:
   push:
     branches:
@@ -26,7 +25,9 @@ jobs:
           mkdir -p /tmp/void-unpack release
           echo "Downloading artifact 8860028980 from this repository..."
           gh api \
+            --method GET \
             -H "Accept: application/vnd.github+json" \
+            --repo "${{ github.repository }}" \
             /repos/${{ github.repository }}/actions/artifacts/8860028980/zip \
             > /tmp/void-artifact.zip
           unzip -o /tmp/void-artifact.zip -d /tmp/void-unpack
@@ -40,9 +41,10 @@ jobs:
         run: |
           set -euo pipefail
           tag="void-arena-fe72d963"
-          gh release delete "$tag" --yes --cleanup-tag || true
+          gh release delete "$tag" --repo "${{ github.repository }}" --yes --cleanup-tag || true
           gh release create "$tag" \
             release/void-arena-pterodactyl-fe72d963.zip \
             release/SHA256SUMS.txt \
+            --repo "${{ github.repository }}" \
             --title "Void Arena Pterodactyl fe72d963" \
             --notes "Ready-to-upload Pterodactyl package from PR #11. Includes respawn visibility fix and packaged map menu fix. Extract directly into /home/container, then run npm start. SHA256 is included as release asset."
