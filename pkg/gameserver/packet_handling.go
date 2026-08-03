@@ -395,7 +395,7 @@ func (s *Server) HandlePacket(client *Client, channelID uint8, message P.Message
 		}
 		log.Printf("Spawning client %d (CN: %d) with life sequence %d", client.SessionID, client.CN, client.LifeSequence+1)
 		s.Spawn(client)
-		client.Send(P.SpawnState{int32(client.CN), client.ToWire()})
+		s.Clients.Broadcast(P.SpawnState{Client: int32(client.CN), EntityState: client.ToWire()})
 
 	case P.N_SPAWN:
 		msg := message.(P.SpawnRequest)
