@@ -7,7 +7,8 @@ import { createGateway } from "./gateway.mjs";
 
 const ROOT = path.resolve(import.meta.dirname);
 const SOURCE_DIR = path.join(ROOT, "suroi");
-const BUN = path.join(ROOT, "bin", "bun");
+const BIN_DIR = path.join(ROOT, "bin");
+const BUN = path.join(BIN_DIR, "bun");
 const VERSION_FILE = path.join(ROOT, "VERSION.json");
 
 function parseEnv(file) {
@@ -69,7 +70,12 @@ async function waitForMainServer(timeoutMs = 120000) {
 }
 
 try {
-  child = spawn(BUN, ["run", "start"], { cwd: SOURCE_DIR, stdio: "inherit", env: { ...process.env, NODE_ENV: "production" } });
+  const runtimePath = [BIN_DIR, process.env.PATH || ""].filter(Boolean).join(path.delimiter);
+  child = spawn(BUN, ["run", "start"], {
+    cwd: SOURCE_DIR,
+    stdio: "inherit",
+    env: { ...process.env, PATH: runtimePath, NODE_ENV: "production" }
+  });
   child.once("error", error => { console.error("[start] Game process failed", error); process.exit(1); });
   child.once("exit", code => { if (!stopping) { console.error(`[start] Game process exited with code ${code}`); process.exit(code || 1); } });
   console.log("[start] Waiting for the internal game API...");
