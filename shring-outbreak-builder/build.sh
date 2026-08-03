@@ -115,9 +115,11 @@ cat game.json
 cleanup
 trap - EXIT
 
-echo "[build] Creating upload ZIP"
+rm -f smoke-test.log health.json server-info.json game.json .env
+
+echo "[build] Creating upload ZIP with workspace symlinks preserved"
 cd "$PACKAGE"
-zip -r -6 "$ROOT/$ZIP" .
+zip -r -y -6 "$ROOT/$ZIP" .
 cd "$ROOT"
 sha256sum "$ZIP" > "$ZIP.sha256"
 unzip -t "$ZIP"
