@@ -27,7 +27,6 @@ jobs:
           gh api \
             --method GET \
             -H "Accept: application/vnd.github+json" \
-            --repo "${{ github.repository }}" \
             /repos/${{ github.repository }}/actions/artifacts/8860028980/zip \
             > /tmp/void-artifact.zip
           unzip -o /tmp/void-artifact.zip -d /tmp/void-unpack
