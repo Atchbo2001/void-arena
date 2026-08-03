@@ -23,11 +23,13 @@ if [ "${#packaged_maps[@]}" -eq 0 ]; then
   exit 1
 fi
 
-# Sauerbraten loads autoexec.cfg after its stock menu catalog. Generate that
-# native config from the same exact map list passed to the asset packager, so
-# every in-game map picker only exposes maps that are actually in this build.
+# Sauerbraten's stock menus include hundreds of maps even when this hosted build
+# only packages a small vetted set. Generate both autoexec.cfg and a direct
+# menus.cfg catalog patch from the same exact ASSET_MAPS list so every native
+# in-game map picker and custom-game creator only offers maps that exist here.
 PACKAGED_MAPS="$asset_maps" python3 - <<'PY'
 import os
+import re
 from pathlib import Path
 
 maps = []
@@ -64,8 +66,25 @@ lines.extend([
     '',
 ])
 
-path = Path("sour/autoexec.cfg")
-path.write_text("\n".join(lines))
+catalog_text = "\n".join(lines)
+Path("sour/autoexec.cfg").write_text(catalog_text)
+
+menus_path = Path("sour/data/menus.cfg")
+menus = menus_path.read_text()
+menus = re.sub(
+    r'//17\n\nffamaps1 = .*?\nallmaps = \(concat \$allffamaps \$allcapturemaps \$allctfmaps \$conceptmaps \$spmaps \$rpgmaps\)',
+    '//17\n\n' + catalog_text.rstrip(),
+    menus,
+    count=1,
+    flags=re.S,
+)
+menus = re.sub(
+    r'showcustommaps = \[\n    custommaps = ""\n    loopfiles curmap "packages/base" "ogz" \[\n        if \(< \(indexof \$allmaps \$curmap\) 0\) \[\n            custommaps = \(concat \$custommaps \(escape \$curmap\)\)\n        \]\n    \]\n    custommaps = \(sortlist \$custommaps x y \[naturalsort \$x \$y\]\)\n    showgui custommaps\n\]',
+    'showcustommaps = [\n    custommaps = $packagedmaps\n    showgui custommaps\n]',
+    menus,
+    count=1,
+)
+menus_path.write_text(menus)
 print(f"native packaged map catalog ({len(maps)}): {catalog}")
 PY
 
