@@ -75,9 +75,15 @@ test -s "$PACKAGE/suroi/client/dist/index.html"
 test -d "$PACKAGE/suroi/node_modules"
 du -sh "$PACKAGE"
 
-echo "[build] Smoke testing the packaged runtime"
+echo "[build] Smoke testing the packaged runtime without a global Bun"
 cd "$PACKAGE"
-./start.sh > smoke-test.log 2>&1 &
+NODE_DIR="$(dirname "$(command -v node)")"
+SMOKE_PATH="$NODE_DIR:/usr/bin:/bin"
+if PATH="$SMOKE_PATH" command -v bun >/dev/null 2>&1; then
+  echo "Smoke-test PATH unexpectedly contains a global Bun executable" >&2
+  exit 1
+fi
+PATH="$SMOKE_PATH" ./start.sh > smoke-test.log 2>&1 &
 SERVER_PID=$!
 cleanup() {
   kill -TERM "$SERVER_PID" 2>/dev/null || true
