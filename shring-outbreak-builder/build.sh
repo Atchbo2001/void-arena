@@ -32,9 +32,10 @@ echo "[build] Compiling production browser client"
 NODE_ENV=production bun run build:client
 
 test -s client/dist/index.html
-test -d client/dist/assets
+test -d client/dist/scripts
+test -d client/dist/img
 grep -q "Shring Outbreak" client/dist/index.html
-if grep -R -q "127.0.0.1:8000" client/dist/assets; then
+if grep -R -q "127.0.0.1:8000" client/dist/scripts; then
   echo "Compiled client still contains the development server address" >&2
   exit 1
 fi
