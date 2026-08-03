@@ -1,0 +1,47 @@
+name: Publish Void Arena Release
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/publish-void-release.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  publish:
+    name: Publish fixed Pterodactyl zip
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download verified Actions artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/void-unpack release
+          echo "Downloading artifact 8860028980 from this repository..."
+          gh api \
+            -H "Accept: application/vnd.github+json" \
+            /repos/${{ github.repository }}/actions/artifacts/8860028980/zip \
+            > /tmp/void-artifact.zip
+          unzip -o /tmp/void-artifact.zip -d /tmp/void-unpack
+          test -f /tmp/void-unpack/void-arena-pterodactyl.zip
+          cp /tmp/void-unpack/void-arena-pterodactyl.zip release/void-arena-pterodactyl-fe72d963.zip
+          sha256sum release/void-arena-pterodactyl-fe72d963.zip | tee release/SHA256SUMS.txt
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="void-arena-fe72d963"
+          gh release delete "$tag" --yes --cleanup-tag || true
+          gh release create "$tag" \
+            release/void-arena-pterodactyl-fe72d963.zip \
+            release/SHA256SUMS.txt \
+            --title "Void Arena Pterodactyl fe72d963" \
+            --notes "Ready-to-upload Pterodactyl package from PR #11. Includes respawn visibility fix and packaged map menu fix. Extract directly into /home/container, then run npm start. SHA256 is included as release asset."
