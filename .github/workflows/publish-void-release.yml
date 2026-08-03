@@ -1,5 +1,6 @@
 name: Publish Void Arena Release
 
+# Bump this file to trigger the release publisher after the workflow exists.
 on:
   push:
     branches:
