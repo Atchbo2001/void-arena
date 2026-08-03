@@ -1,0 +1,51 @@
+name: Shring Outbreak PR artifact
+
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - synchronize
+      - reopened
+    paths:
+      - "shring-outbreak-builder/**"
+      - ".github/workflows/shring-outbreak-pr-build.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  UPSTREAM_COMMIT: 85df5067b19a876cac4304232cc1e68ff1b07c7f
+  RELEASE_VERSION: 1.1.0
+  PUBLIC_URL: https://shootup.shring.net
+
+jobs:
+  build:
+    name: Build verified Pterodactyl ZIP
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out build branch
+        uses: actions/checkout@v4
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - name: Build and smoke test package
+        shell: bash
+        run: bash shring-outbreak-builder/build.sh
+
+      - name: Upload Pterodactyl artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: shring-outbreak-pterodactyl-v1.1.0
+          path: |
+            Shring-Outbreak-Suroi-v1.1.0-PREBUILT-FLAT.zip
+            Shring-Outbreak-Suroi-v1.1.0-PREBUILT-FLAT.zip.sha256
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
